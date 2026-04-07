@@ -44,38 +44,67 @@ LOG_FILE="/var/log/bootstrap.log"
 # 1. Welcome Message
 whiptail --title "Cam's VPS Bootstrap" --msgbox "This script will prepare a fresh linux instance.\n\nTarget: Any Debian or Ubunutu Instance" 15 60
 
-# 2. Interactive Menu
-# We swap file descriptors 3 and 1 to capture the result of the menu
-CHOICE=$(whiptail --title "Setup Options" --menu "Choose your configuration:" 15 60 4 \
-"1" "Standard OCI (No UFW, Safe for Boot Volumes)" \
-"2" "Generic VPS (Enables UFW - NOT FOR OCI)" \
-"3" "Minimal (No Firewall/Tailscale)" \
-"4" "Exit" 3>&1 1>&2 2>&3)
+# --- 1. The Checklist Menu ---
+# The syntax for checklist is: [tag] [item] [status (on/off)]
+RESULTS=$(whiptail --title "Mach Labs Bootstrap" --checklist \
+"Spacebar to select/deselect, Enter to confirm:" 20 75 10 \
+"UPDATE" "Update System (apt update/upgrade)" ON \
+"TIME"   "Set Timezone (UTC)" ON \
+"AUTO"   "Enable unattended-upgrades & needrestart" ON \
+"HOST"   "Set hostname" OFF \
+"USER"   "Add non-root user" OFF \
+"SSH"    "Harden SSH (Disable Password Auth)" OFF \
+"UFW"    "Install and configure UFW (NOT FOR OCI)" OFF \
+"TS"     "Install and configure Tailscale" ON \
+"DOCKER" "Install Docker" ON \
+"GIT"    "Install Git" OFF 3>&1 1>&2 2>&3)
 
-# If the user hits 'Cancel' or 'Esc', whiptail returns a non-zero exit code
-if [ $? -ne 0 ] || [ "$CHOICE" = "4" ]; then
+# Exit cleanly if user hits Cancel or Esc
+if [ $? -ne 0 ]; then
     echo "Setup cancelled by user."
     exit 0
 fi
 
-# 3. Logic based on selection
-case $CHOICE in
-    1)
-        USE_UFW=false
-        INSTALL_TAILSCALE=true
-        echo "Selected: Standard OCI Mode"
-        ;;
-    2)
-        USE_UFW=true
-        INSTALL_TAILSCALE=true
-        echo "Selected: Generic VPS Mode"
-        ;;
-    3)
-        USE_UFW=false
-        INSTALL_TAILSCALE=false
-        echo "Selected: Minimal Mode"
-        ;;
-esac
+# --- 2. Initialize Variables (Default to false) ---
+DO_UPDATE=false
+DO_TIME=false
+DO_AUTO=false
+DO_HOST=false
+DO_USER=false
+DO_SSH=false
+DO_UFW=false
+DO_TS=false
+DO_DOCKER=false
+DO_GIT=false
+
+# --- 3. Parse the Results ---
+# whiptail returns a string like: "UPDATE" "TIME" "TS"
+# We check if the tag exists in the RESULTS string
+[[ $RESULTS =~ "UPDATE" ]] && DO_UPDATE=true
+[[ $RESULTS =~ "TIME" ]]   && DO_TIME=true
+[[ $RESULTS =~ "AUTO" ]]   && DO_AUTO=true
+[[ $RESULTS =~ "HOST" ]]   && DO_HOST=true
+[[ $RESULTS =~ "USER" ]]   && DO_USER=true
+[[ $RESULTS =~ "SSH" ]]    && DO_SSH=true
+[[ $RESULTS =~ "UFW" ]]    && DO_UFW=true
+[[ $RESULTS =~ "TS" ]]     && DO_TS=true
+[[ $RESULTS =~ "DOCKER" ]] && DO_DOCKER=true
+[[ $RESULTS =~ "GIT" ]]    && DO_GIT=true
+
+# --- 4. Sanity Check (The Echo List) ---
+echo "------------------------------------------"
+echo "USER SELECTIONS:"
+echo "Update System:      $DO_UPDATE"
+echo "Set Timezone:       $DO_TIME"
+echo "Auto Upgrades:      $DO_AUTO"
+echo "Set Hostname:       $DO_HOST"
+echo "Add User:           $DO_USER"
+echo "Harden SSH:         $DO_SSH"
+echo "Install UFW:        $DO_UFW"
+echo "Install Tailscale:  $DO_TS"
+echo "Install Docker:     $DO_DOCKER"
+echo "Install Git:        $DO_GIT"
+echo "------------------------------------------"
 
 # 4. Confirmation (Yes/No Box)
 if whiptail --title "Confirm" --yesno "Proceed with installation?" 8 45; then
