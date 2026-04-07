@@ -49,19 +49,28 @@ whiptail --title "Cam's VPS Bootstrap" --msgbox "This script will prepare a fres
 RESULTS=$(whiptail --title "Mach Labs Bootstrap" --checklist \
 "Spacebar to select/deselect, Enter to confirm:" 20 75 10 \
 "UPDATE" "Update System (apt update/upgrade)" ON \
-"TIME"   "Set Timezone (UTC)" ON \
-"AUTO"   "Enable unattended-upgrades & needrestart" ON \
+"TIME"   "Set Timezone (UTC)" OFF \
+"AUTO"   "Enable unattended-upgrades & needrestart" OFF \
 "HOST"   "Set hostname" OFF \
 "USER"   "Add non-root user" OFF \
 "SSH"    "Harden SSH (Disable Password Auth)" OFF \
 "UFW"    "Install and configure UFW (NOT FOR OCI)" OFF \
-"TS"     "Install and configure Tailscale" ON \
-"DOCKER" "Install Docker" ON \
+"TS"     "Install and configure Tailscale" OFF \
+"DOCKER" "Install Docker" OFF \
 "GIT"    "Install Git" OFF 3>&1 1>&2 2>&3)
 
-# Exit cleanly if user hits Cancel or Esc
-if [ $? -ne 0 ]; then
-    echo "Setup cancelled by user."
+# Capture the exit status immediately after the command
+exit_status=$?
+
+# Logic check: 
+# 0 = User pressed OK
+# 1 = User pressed Cancel
+# 255 = User pressed ESC
+if [ $exit_status -ne 0 ]; then
+    echo "------------------------------------------"
+    echo "EXITED: User pressed Cancel or ESC."
+    echo "Status code: $exit_status"
+    echo "------------------------------------------"
     exit 0
 fi
 
