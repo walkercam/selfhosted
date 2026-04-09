@@ -46,33 +46,24 @@ whiptail --title "Cam's VPS Bootstrap" --msgbox "This script will prepare a fres
 
 # --- 1. The Checklist Menu ---
 # The syntax for checklist is: [tag] [item] [status (on/off)]
-RESULTS=$(whiptail --title "Mach Labs Bootstrap" --checklist \
-"Spacebar to select/deselect, Enter to confirm:" 20 75 10 \
-"UPDATE" "Update System (apt update/upgrade)" ON \
-"TIME"   "Set Timezone (UTC)" OFF \
-"AUTO"   "Enable unattended-upgrades & needrestart" OFF \
-"HOST"   "Set hostname" OFF \
-"USER"   "Add non-root user" OFF \
-"SSH"    "Harden SSH (Disable Password Auth)" OFF \
-"UFW"    "Install and configure UFW (NOT FOR OCI)" OFF \
-"TS"     "Install and configure Tailscale" OFF \
-"DOCKER" "Install Docker" OFF \
-"GIT"    "Install Git" OFF 3>&1 1>&2 2>&3)
-
-# Capture the exit status immediately after the command
-exit_status=$?
-
-# Logic check: 
-# 0 = User pressed OK
-# 1 = User pressed Cancel
-# 255 = User pressed ESC
-if [ $exit_status -ne 0 ]; then
-    echo "------------------------------------------"
-    echo "EXITED: User pressed Cancel or ESC."
-    echo "Status code: $exit_status"
-    echo "------------------------------------------"
+RESULTS=$(
+    whiptail --title "Mach Labs Bootstrap" --checklist \
+    "Spacebar to select/deselect, Enter to confirm:" 20 75 10 \
+    "UPDATE" "Update System (apt update/upgrade)" ON \
+    "TIME"   "Set Timezone (UTC)" ON \
+    "AUTO"   "Enable unattended-upgrades & needrestart" ON \
+    "HOST"   "Set hostname" OFF \
+    "USER"   "Add non-root user" OFF \
+    "SSH"    "Harden SSH (Disable Password Auth)" OFF \
+    "UFW"    "Install and configure UFW (NOT FOR OCI)" OFF \
+    "TS"     "Install and configure Tailscale" ON \
+    "DOCKER" "Install Docker" ON \
+    "GIT"    "Install Git" OFF \
+    3>&1 1>&2 2>&3
+) || {
+    echo "Setup cancelled by user."
     exit 0
-fi
+}
 
 # --- 2. Initialize Variables (Default to false) ---
 DO_UPDATE=false
@@ -89,16 +80,17 @@ DO_GIT=false
 # --- 3. Parse the Results ---
 # whiptail returns a string like: "UPDATE" "TIME" "TS"
 # We check if the tag exists in the RESULTS string
-[[ $RESULTS =~ "UPDATE" ]] && DO_UPDATE=true
-[[ $RESULTS =~ "TIME" ]]   && DO_TIME=true
-[[ $RESULTS =~ "AUTO" ]]   && DO_AUTO=true
-[[ $RESULTS =~ "HOST" ]]   && DO_HOST=true
-[[ $RESULTS =~ "USER" ]]   && DO_USER=true
-[[ $RESULTS =~ "SSH" ]]    && DO_SSH=true
-[[ $RESULTS =~ "UFW" ]]    && DO_UFW=true
-[[ $RESULTS =~ "TS" ]]     && DO_TS=true
-[[ $RESULTS =~ "DOCKER" ]] && DO_DOCKER=true
-[[ $RESULTS =~ "GIT" ]]    && DO_GIT=true
+# Match full tokens including quotes to avoid substring bugs
+[[ $RESULTS == *'"UPDATE"'* ]] && DO_UPDATE=true
+[[ $RESULTS == *'"TIME"'* ]]   && DO_TIME=true
+[[ $RESULTS == *'"AUTO"'* ]]   && DO_AUTO=true
+[[ $RESULTS == *'"HOST"'* ]]   && DO_HOST=true
+[[ $RESULTS == *'"USER"'* ]]   && DO_USER=true
+[[ $RESULTS == *'"SSH"'* ]]    && DO_SSH=true
+[[ $RESULTS == *'"UFW"'* ]]    && DO_UFW=true
+[[ $RESULTS == *'"TS"'* ]]     && DO_TS=true
+[[ $RESULTS == *'"DOCKER"'* ]] && DO_DOCKER=true
+[[ $RESULTS == *'"GIT"'* ]]    && DO_GIT=true
 
 # --- 4. Sanity Check (The Echo List) ---
 echo "------------------------------------------"
