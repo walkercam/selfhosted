@@ -4,8 +4,12 @@
 # Cam's Interactive VPS Bootstrap
 # Uses whiptail for that "Proxmox-style" feel.
 # Run this by running the command below in the shell:
-# bash -c "$(curl -fsSL https://raw.githubusercontent.com/walkercam/selfhosted/refs/heads/main/bootstrap.sh)"
+# sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/walkercam/selfhosted/refs/heads/main/bootstrap.sh)"
 # ==============================================================================
+
+#TODO:
+#Add logging
+#Add dry run mode
 
 set -euo pipefail #exit on errors - don't just try to continue
 
@@ -40,6 +44,13 @@ TIMEZONE="Pacific/Auckland"
 STACK_DIR="/opt/stacks"
 REBOOT_TIME="02:00"
 LOG_FILE="/var/log/bootstrap.log"
+NEW_USER="cam"
+
+#Check that we have sudo 
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run this script as root (use sudo)."
+    exit 1
+fi
 
 # 1. Welcome Message
 whiptail --title "Cam's VPS Bootstrap" --msgbox "This script will prepare a fresh linux instance.\n\nTarget: Any Debian or Ubunutu Instance" 15 60
@@ -92,7 +103,7 @@ DO_GIT=false
 [[ $RESULTS == *'"DOCKER"'* ]] && DO_DOCKER=true
 [[ $RESULTS == *'"GIT"'* ]]    && DO_GIT=true
 
-# --- 4. Sanity Check (The Echo List) ---
+# --- 4. Sanity Check (Echo the list) ---
 echo "------------------------------------------"
 echo "USER SELECTIONS:"
 echo "Update System:      $DO_UPDATE"
@@ -111,27 +122,36 @@ echo "------------------------------------------"
 if whiptail --title "Confirm" --yesno "Proceed with installation?" 8 45; then
     echo "Starting deployment..."
 else
-    echo "Aborted."
+    echo "User aborted."
     exit 1
 fi
 
 # --- Execution Starts Here ---
-echo "--- Starting System Updates ---"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update && apt-get upgrade -y && apt autoremove -y
-#add reboot if required
 
-# Install must have software
-# curl and wget are core linux functionality
-# unattended-upgrades and needrestart for our auto updating process
-# tmux for SSH session persistence (need to figure out how to use it!)
-apt-get install -y curl wget unattended-upgrades needrestart tmux
+if [ "$DO_UPDATE" = true ]; then
+	echo "--- Starting System Updates ---"
+	apt-get update && apt-get upgrade -y && apt autoremove -y
+	# Install must have software
+	# curl and wget are core linux functionality
+	# tmux for SSH session persistence (need to figure out how to use it!)
+	echo "--- Installing required software curl and wget ---"
+	apt-get install -y curl wget sudo
+	# add reboot if required
+fi
 
-#Set time and date
-timedatectl set-timezone "$TIMEZONE"
+if [ "$DO_TIME" = true ]; then
+	#Set time and date
+	echo "--- Setting timezone ---"
+	timedatectl set-timezone "$TIMEZONE"
+fi
 
-# Using '>' ensures we overwrite any old config in this file
-cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-cams-custom
+if [ "$DO_AUTO" = true ]; then
+	echo "--- Starting Auto Update configuration ---"
+	echo "--- Installing required update software unattended-upgrades and needrestart ---"
+	apt-get install -y unattended-upgrades needrestart
+	# Using '>' ensures we overwrite any old config in this file
+	cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-cams-custom
 // Overwritten by Cams Bootstrap Script
 // Any manual changes made here will be overwritten if the bootstrap script is ever run again
 Unattended-Upgrade::Automatic-Reboot "true";
@@ -141,32 +161,129 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
 EOF
 
-# 3. Configure needrestart for automatic mode
-sed -i "s/#\$nrconf{restart} = 'i';/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+	# Configure needrestart for automatic mode	
+	sed -i "s/#\$nrconf{restart} = 'i';/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+fi
 
-# add a new non root user? i think on oci this is already done with the ubuntu user but i need to research best practice
-# if nothing else it would be nice to have a more realted username like homelab-ops or whatever
-#add new user to sudo group
+if [ "$DO_HOST" = true ]; then
+	#set hostname
+	#hostnamectl set-hostname your-server-name
+	#nano /etc/hosts
+	#Add: 127.0.1.1 your-server-name to that file
+fi
 
-#set hostname
-#hostnamectl set-hostname your-server-name
-#nano /etc/hosts
-#Add: 127.0.1.1 your-server-name to that file
+if [ "$DO_USER" = true ]; then
+	# add a new non root user. this would typically just be 'cam'
+	echo "Creating new user..."
+	# pop up a whiptail box to enter NEW_USER name (show default which is set above)
+	if id "$NEW_USER" >/dev/null 2>&1; then
+		echo "User $NEW_USER already exists, skipping creation."
+	else
+		useradd -m -s /bin/bash -c "Created with Cams bootstrap script" "$NEW_USER"
+		# add whiptail box to enter password, check it and then set it
+		# password must not be empty and be more than 8 chars long
+		# if password doesn't pass then ask them to reenter a new one
+		usermod -aG sudo "$NEW_USER"
+		# fix ownership and permissions
+		# Prepare .ssh directory
+	fi
+fi
 
-# 4. SSH Hardening
-# need to figure out some elegant way to insert a ssh key - maybe a whiptail input box?
-#change port? not that keen 
-mkdir -p /etc/ssh/sshd_config.d
-cat <<EOF > /etc/ssh/sshd_config.d/99-hardening.conf
+if [ "$DO_USER" = true ]; then
+    echo "Creating new user..."
+
+    # Prompt for username (with default)
+    NEW_USER=$(whiptail --inputbox "Enter new username:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3)
+
+    if [ $? -ne 0 ]; then
+        echo "User creation cancelled."
+        exit 0
+    fi
+
+    if id "$NEW_USER" >/dev/null 2>&1; then
+        echo "User $NEW_USER already exists, skipping creation."
+    else
+        useradd -m -s /bin/bash -c "Created with Cam's bootstrap script" "$NEW_USER"
+
+        # --- Password input + validation loop ---
+		while true; do
+			if ! PASSWORD1=$(whiptail --passwordbox "Enter password for $NEW_USER (min 8 chars):" 10 60 3>&1 1>&2 2>&3); then
+				echo "User creation cancelled."
+				exit 0
+			fi
+
+			if ! PASSWORD2=$(whiptail --passwordbox "Confirm password:" 10 60 3>&1 1>&2 2>&3); then
+				echo "User creation cancelled."
+				exit 0
+			fi
+
+			if [ -z "$PASSWORD1" ]; then
+				whiptail --msgbox "Password cannot be empty." 8 40
+				continue
+			fi
+
+			if [ ${#PASSWORD1} -lt 8 ]; then
+				whiptail --msgbox "Password must be at least 8 characters long." 8 50
+				continue
+			fi
+
+			if [ "$PASSWORD1" != "$PASSWORD2" ]; then
+				whiptail --msgbox "Passwords do not match. Try again." 8 50
+				continue
+			fi
+
+			break
+		done
+
+        echo "$NEW_USER:$PASSWORD1" | chpasswd
+		unset PASSWORD1 PASSWORD2 # Remove plain text passwords from memory
+
+        # Add to sudo group
+        usermod -aG sudo "$NEW_USER"
+
+        # Fix ownership and permissions
+        chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"
+        chmod 700 /home/"$NEW_USER"
+
+        # Prepare .ssh directory
+        mkdir -p /home/"$NEW_USER"/.ssh
+        chmod 700 /home/"$NEW_USER"/.ssh
+        chown "$NEW_USER:$NEW_USER" /home/"$NEW_USER"/.ssh
+
+        echo "User $NEW_USER has been successfully created and configured."
+    fi
+fi
+
+# SSH Hardening
+if [ "$DO_SSH" = true ]; then
+	echo "--- Installing Tmux for persistent SSH sessions ---"
+	apt-get install -y tmux
+	install -d -m 755 /etc/ssh/sshd_config.d
+	cat <<EOF > /etc/ssh/sshd_config.d/99-hardening.conf
 PasswordAuthentication no
 PermitRootLogin no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+X11Forwarding no
+AuthenticationMethods publickey
 EOF
-#PubkeyAuthentication yes??
-systemctl restart ssh
+	systemctl reload ssh #reload keeps current connections alive, restart will kill them if there's a syntax error in the new settings
+	
+	# add a whiptail popup here that halts installation and asks the user to check ssh login before proceeding
+	# only proceed if they say it works otherwise exit and echo to the user that they need to fix ssh before
+	# running this script again (and to not log out of this session)
+fi
 
-#add fail2ban
+	# Todo:
+	# 👉 Make sure you already have SSH keys working before submitting this change otherwise you can lock yourself out
+	# detect if keys exist first?
+	# warn the user via whiptail?
+	# auto-install their public key? Add a dialog where it can be pasted in?
+	
 
-if [ "$USE_UFW" = true ]; then
+# Don't use UFW because OCI sets the defaults up with iptables and iptables-persistent we can just leave it as is
+if [ "$DO_UFW" = true ]; then
     echo "Installing UFW and setting default rules..."
     apt-get install -y ufw
 	ufw default deny incoming
@@ -174,27 +291,25 @@ if [ "$USE_UFW" = true ]; then
 	ufw allow 22/tcp
     ufw allow in on tailscale0 # Allow all traffic over Tailscale
     ufw --force enable	
-else
-        echo "Running OCI Safe Setup..."
-        # We don't use UFW because OCI sets the defaults up with iptables and iptables-persistent 
-		# we can just leave it as is
-		here to protect OCI boot volumes
 fi
 
-if [ "$INSTALL_TAILSCALE" = true ]; then
+if [ "$DO_TS" = true ]; then
 	echo "--- Installing Tailscale ---"
 	curl -fsSL https://tailscale.com/install.sh | sh
 	tailscale up --authkey="$TS_AUTHKEY" 
+	#tailscale set --ssh	# Enable tailscale SSH - need to check if this breaks normal ssh?
 fi
 
-if [ "$INSTALL_DOCKER" = true ]; then
+if [ "$DO_DOCKER" = true ]; then
 	echo "--- Installing Docker ---"
 	curl -fsSL https://get.docker.com | sh
 	# Make a home for docker stacks -p create parent directories and will not error is this directory already exists
 	mkdir -p "$STACK_DIR"
 fi
 
-#add optional install for git (for downloaded/version controlling docker compose files)
+if [ "$DO_GIT" = true ]; then
+	#add optional install for git (for downloaded/version controlling docker compose files)
+fi
 
 whiptail --title "Success" --msgbox "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
 
