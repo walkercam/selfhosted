@@ -259,80 +259,92 @@ if [ "$DO_USER" = true ]; then
 fi
 
 if [ "$DO_KEYS" = true ]; then
-echo "Starting SSH key configuration..."
+    echo "Starting SSH key configuration..."
 
-    # 1. Select the target user
-    # We generate a list: "username" "User" (tag and description)
-    # Using a mapfile or a loop to ensure whiptail gets the right argument count
-    USER_OPTIONS=()
-    while IFS=: read -r username _ uid _ _ _ _; do
-        if [ "$uid" -ge 1000 ] && [ "$username" != "nobody" ]; then
-            USER_OPTIONS+=("$username" "System User")
+    while true; do
+        # 1. Build the target user list
+        USER_OPTIONS=()
+        while IFS=: read -r username _ uid _ _ _ _; do
+            if [ "$uid" -ge 1000 ] && [ "$username" != "nobody" ]; then
+                USER_OPTIONS+=("$username" "System User")
+            fi
+        done < /etc/passwd
+        USER_OPTIONS+=("DONE" "Finish & Move to Next Section")
+
+        # Select User
+		if ! TARGET_USER=$(whiptail --title "Select User" --menu "Select a user to modify keys, or 'DONE' to continue." 15 60 6 "${USER_OPTIONS[@]}" 3>&1 1>&2 2>&3); then
+			echo "SSH Key addition cancelled. Stopping script here."
+			exit 0
+		fi
+	
+        if [ "$TARGET_USER" = "DONE" ]; then
+            break
         fi
-    done < /etc/passwd
 
-	if ! TARGET_USER=$(whiptail --title "Select User" --menu "Which user should receive these keys?" 15 60 5 "${USER_OPTIONS[@]}" 3>&1 1>&2 2>&3); then
-		echo "SSH Key addition cancelled. Stopping script here."
-		exit 0
-	fi
-
-    if [ -z "$TARGET_USER" ]; then
-        echo "No user selected. Skipping key addition."
-    else
-        # 2. Ensure .ssh directory and file exist
+        # 2. Identify Paths
         USER_HOME=$(eval echo "~$TARGET_USER")
         SSH_DIR="$USER_HOME/.ssh"
         AUTH_KEYS="$SSH_DIR/authorized_keys"
-
         mkdir -p "$SSH_DIR"
         touch "$AUTH_KEYS"
-        
-        # Initial permission set to ensure we can write to it
-        chown -R "$TARGET_USER:$TARGET_USER" "$SSH_DIR"
         chmod 700 "$SSH_DIR"
         chmod 600 "$AUTH_KEYS"
 
-        # 3. Key Input Loop
+        # 3. Handle Deletion of Existing Keys
+        if [ -s "$AUTH_KEYS" ]; then
+            CHECKLIST_ITEMS=()
+            # Read keys into a numbered list for the checklist
+            # We use the line number as the tag
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                KEY_INFO=$(echo "$line" | awk '{print $1, $3}')
+                CHECKLIST_ITEMS+=("$line" "$KEY_INFO" "ON")
+            done < "$AUTH_KEYS"
+
+            # Pop up checkbox: Selected keys will be REMAINING
+            SELECTED_KEYS=$(whiptail --title "Manage Existing Keys" --separate-output --checklist \
+            "Uncheck keys to DELETE them. Press Space to toggle, Enter to confirm." 15 70 6 "${CHECKLIST_ITEMS[@]}" 3>&1 1>&2 2>&3)
+
+            if [ $? -eq 0 ]; then
+                echo "$SELECTED_KEYS" > "$AUTH_KEYS"
+                echo "Keys updated for $TARGET_USER."
+            fi
+        fi
+
+        # 4. Display Current Status
+        if [ -s "$AUTH_KEYS" ]; then
+            KEY_SUMMARY=$(awk '{print "Type: " $1 " | Comment: " $3}' "$AUTH_KEYS")
+            whiptail --title "Existing Keys for $TARGET_USER" --msgbox "Current active keys:\n\n$KEY_SUMMARY" 15 70
+        else
+            whiptail --title "Keys Status" --msgbox "No keys currently exist for $TARGET_USER." 8 50
+        fi
+
+        # 5. Key Addition Loop
         while true; do
-            PASTED_KEY=$(whiptail --title "Add SSH Key" --inputbox "Paste your public key here (ssh-rsa, ssh-ed25519, etc.):" 10 70 3>&1 1>&2 2>&3)
+            if ! whiptail --title "Add New Key" --yesno "Would you like to ADD a new SSH key for $TARGET_USER?" 8 50; then
+                break
+            fi
+
+            PASTED_KEY=$(whiptail --title "Add SSH Key" --inputbox "Paste public key (ssh-rsa, ed25519, etc.):" 10 70 3>&1 1>&2 2>&3)
             
-            if [ -z "$PASTED_KEY" ]; then
-                whiptail --msgbox "No key entered." 8 40
-            else
-                # 4. Sanity Check the Input
-                # We write to a temp file to let ssh-keygen validate the string format
+            if [ -n "$PASTED_KEY" ]; then
                 TEMP_KEY=$(mktemp)
                 echo "$PASTED_KEY" > "$TEMP_KEY"
-                
                 if ssh-keygen -l -f "$TEMP_KEY" >/dev/null 2>&1; then
                     echo "$PASTED_KEY" >> "$AUTH_KEYS"
-                    echo "Key successfully added to $TARGET_USER."
-                    whiptail --msgbox "Key validated and added successfully!" 8 40
+                    whiptail --msgbox "Key added successfully!" 8 40
                 else
-                    whiptail --msgbox "Invalid SSH key format. Please ensure you copied the entire public key string." 8 60
+                    whiptail --msgbox "Invalid key format. Skipping." 8 40
                 fi
                 rm -f "$TEMP_KEY"
             fi
-
-            # 5. Ask to add another
-            if ! whiptail --title "Add Another?" --yesno "Would you like to add another SSH key for $TARGET_USER?" 8 50; then
-                break
-            fi
         done
 
-        # 6. Display Summary of loaded keys
-        # We extract Type (Field 1) and Comment (Field 3+)
-        if [ -s "$AUTH_KEYS" ]; then
-            KEY_SUMMARY=$(awk '{print "Type: " $1 " | Comment: " $3}' "$AUTH_KEYS")
-            whiptail --title "Current Keys for $TARGET_USER" --msgbox "The following keys are now active:\n\n$KEY_SUMMARY" 15 70
-        else
-            echo "No keys were added to the authorized_keys file."
-        fi
-        
-        # Final permission enforcement
+        # Final ownership enforcement for this user's loop
         chown -R "$TARGET_USER:$TARGET_USER" "$SSH_DIR"
-        echo "SSH key configuration for $TARGET_USER complete."
-    fi
+        chmod 600 "$AUTH_KEYS"
+    done
+    echo "SSH Key Management section complete."
 fi
 
 # SSH Hardening
