@@ -170,6 +170,8 @@ if [ "$DO_HOST" = true ]; then
 	#hostnamectl set-hostname your-server-name
 	#nano /etc/hosts
 	#Add: 127.0.1.1 your-server-name to that file
+	
+	HOSTNAME=$(whiptail --inputbox "Enter hostname:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3)
 fi
 
 if [ "$DO_USER" = true ]; then
