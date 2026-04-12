@@ -166,29 +166,12 @@ EOF
 fi
 
 if [ "$DO_HOST" = true ]; then
-	#set hostname
-	#hostnamectl set-hostname your-server-name
-	#nano /etc/hosts
-	#Add: 127.0.1.1 your-server-name to that file
+	# set hostname
+	# hostnamectl set-hostname your-server-name
+	# nano /etc/hosts
+	# Add: 127.0.1.1 your-server-name to that file
 	
 	HOSTNAME=$(whiptail --inputbox "Enter hostname:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3)
-fi
-
-if [ "$DO_USER" = true ]; then
-	# add a new non root user. this would typically just be 'cam'
-	echo "Creating new user..."
-	# pop up a whiptail box to enter NEW_USER name (show default which is set above)
-	if id "$NEW_USER" >/dev/null 2>&1; then
-		echo "User $NEW_USER already exists, skipping creation."
-	else
-		useradd -m -s /bin/bash -c "Created with Cams bootstrap script" "$NEW_USER"
-		# add whiptail box to enter password, check it and then set it
-		# password must not be empty and be more than 8 chars long
-		# if password doesn't pass then ask them to reenter a new one
-		usermod -aG sudo "$NEW_USER"
-		# fix ownership and permissions
-		# Prepare .ssh directory
-	fi
 fi
 
 if [ "$DO_USER" = true ]; then
