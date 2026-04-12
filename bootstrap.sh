@@ -65,6 +65,7 @@ RESULTS=$(
     "AUTO"   "Enable unattended-upgrades & needrestart" ON \
     "HOST"   "Set hostname" OFF \
     "USER"   "Add non-root user" OFF \
+	"KEYS"	 "Add new SSH public keys" OFF \
     "SSH"    "Harden SSH (Disable Password Auth)" OFF \
     "UFW"    "Install and configure UFW (NOT FOR OCI)" OFF \
     "TS"     "Install and configure Tailscale" ON \
@@ -82,6 +83,7 @@ DO_TIME=false
 DO_AUTO=false
 DO_HOST=false
 DO_USER=false
+DO_KEYS=false
 DO_SSH=false
 DO_UFW=false
 DO_TS=false
@@ -97,6 +99,7 @@ DO_GIT=false
 [[ $RESULTS == *'"AUTO"'* ]]   && DO_AUTO=true
 [[ $RESULTS == *'"HOST"'* ]]   && DO_HOST=true
 [[ $RESULTS == *'"USER"'* ]]   && DO_USER=true
+[[ $RESULTS == *'"KEYS"'* ]]   && DO_KEYS=true
 [[ $RESULTS == *'"SSH"'* ]]    && DO_SSH=true
 [[ $RESULTS == *'"UFW"'* ]]    && DO_UFW=true
 [[ $RESULTS == *'"TS"'* ]]     && DO_TS=true
@@ -111,6 +114,7 @@ echo "Set Timezone:       $DO_TIME"
 echo "Auto Upgrades:      $DO_AUTO"
 echo "Set Hostname:       $DO_HOST"
 echo "Add User:           $DO_USER"
+echo "Add SSH Keys:       $DO_KEYS"
 echo "Harden SSH:         $DO_SSH"
 echo "Install UFW:        $DO_UFW"
 echo "Install Tailscale:  $DO_TS"
@@ -178,12 +182,10 @@ if [ "$DO_USER" = true ]; then
     echo "Creating new user..."
 
     # Prompt for username (with default)
-    NEW_USER=$(whiptail --inputbox "Enter new username:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3)
-
-    if [ $? -ne 0 ]; then
-        echo "User creation cancelled."
-        exit 0
-    fi
+	if ! NEW_USER=$(whiptail --inputbox "Enter new username:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3); then
+		echo "User creation cancelled."
+		exit 0
+	fi
 
     if id "$NEW_USER" >/dev/null 2>&1; then
         echo "User $NEW_USER already exists, skipping creation."
@@ -203,12 +205,12 @@ if [ "$DO_USER" = true ]; then
 			fi
 
 			if [ -z "$PASSWORD1" ]; then
-				whiptail --msgbox "Password cannot be empty." 8 40
+				whiptail --msgbox "Password cannot be empty. Try again." 8 40
 				continue
 			fi
 
 			if [ ${#PASSWORD1} -lt 8 ]; then
-				whiptail --msgbox "Password must be at least 8 characters long." 8 50
+				whiptail --msgbox "Password must be at least 8 characters long. Try again." 8 50
 				continue
 			fi
 
@@ -226,16 +228,100 @@ if [ "$DO_USER" = true ]; then
         # Add to sudo group
         usermod -aG sudo "$NEW_USER"
 
-        # Fix ownership and permissions
-        chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"
-        chmod 700 /home/"$NEW_USER"
-
         # Prepare .ssh directory
         mkdir -p /home/"$NEW_USER"/.ssh
+		
+        # --- NEW: SSH Key Transfer Logic ---
+        # Identify who is running sudo to find their keys
+        REAL_USER=${SUDO_USER:-$(whoami)}
+        AUTH_KEYS_FILE="/home/$REAL_USER/.ssh/authorized_keys"
+
+        if [ -f "$AUTH_KEYS_FILE" ]; then
+            # Extract key info for the dialog box (Type and Comment/Email)
+            # This handles multiple keys by taking the first one found
+            KEY_INFO=$(awk '{print $1, $3}' "$AUTH_KEYS_FILE" | head -n 1)
+            
+            if whiptail --title "Transfer SSH Keys" --yesno "Found existing key for $REAL_USER:\n\n$KEY_INFO\n\nTransfer this to $NEW_USER?" 12 60; then
+                cp "$AUTH_KEYS_FILE" /home/"$NEW_USER"/.ssh/authorized_keys
+                echo "SSH keys transferred from $REAL_USER."
+            fi
+        fi
+		
+        # Fix ownership and permissions
+        # Doing this AFTER the SSH transfer ensures the new keys have correct ownership
+        chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"
+        chmod 700 /home/"$NEW_USER"
         chmod 700 /home/"$NEW_USER"/.ssh
-        chown "$NEW_USER:$NEW_USER" /home/"$NEW_USER"/.ssh
+		[ -f /home/"$NEW_USER"/.ssh/authorized_keys ] && chmod 600 /home/"$NEW_USER"/.ssh/authorized_keys
 
         echo "User $NEW_USER has been successfully created and configured."
+    fi
+fi
+
+if [ "$DO_KEYS" = true ]; then
+    echo "Starting SSH key configuration..."
+
+    # 1. Select the target user
+    # We pull a list of normal users (UID >= 1000) to choose from
+    USER_LIST=$(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1, ""}' /etc/passwd)
+    TARGET_USER=$(whiptail --title "Select User" --menu "Which user should receive these keys?" 15 60 5 $USER_LIST 3>&1 1>&2 2>&3)
+
+    if [ -z "$TARGET_USER" ]; then
+        echo "No user selected. Skipping key addition."
+    else
+        # 2. Ensure .ssh directory and file exist
+        USER_HOME=$(eval echo "~$TARGET_USER")
+        SSH_DIR="$USER_HOME/.ssh"
+        AUTH_KEYS="$SSH_DIR/authorized_keys"
+
+        mkdir -p "$SSH_DIR"
+        touch "$AUTH_KEYS"
+        
+        # Initial permission set to ensure we can write to it
+        chown -R "$TARGET_USER:$TARGET_USER" "$SSH_DIR"
+        chmod 700 "$SSH_DIR"
+        chmod 600 "$AUTH_KEYS"
+
+        # 3. Key Input Loop
+        while true; do
+            PASTED_KEY=$(whiptail --title "Add SSH Key" --inputbox "Paste your public key here (ssh-rsa, ssh-ed25519, etc.):" 10 70 3>&1 1>&2 2>&3)
+            
+            if [ -z "$PASTED_KEY" ]; then
+                whiptail --msgbox "No key entered." 8 40
+            else
+                # 4. Sanity Check the Input
+                # We write to a temp file to let ssh-keygen validate the string format
+                TEMP_KEY=$(mktemp)
+                echo "$PASTED_KEY" > "$TEMP_KEY"
+                
+                if ssh-keygen -l -f "$TEMP_KEY" >/dev/null 2>&1; then
+                    echo "$PASTED_KEY" >> "$AUTH_KEYS"
+                    echo "Key successfully added to $TARGET_USER."
+                    whiptail --msgbox "Key validated and added successfully!" 8 40
+                else
+                    whiptail --msgbox "Invalid SSH key format. Please ensure you copied the entire public key string." 8 60
+                fi
+                rm -f "$TEMP_KEY"
+            fi
+
+            # 5. Ask to add another
+            if ! whiptail --title "Add Another?" --yesno "Would you like to add another SSH key for $TARGET_USER?" 8 50; then
+                break
+            fi
+        done
+
+        # 6. Display Summary of loaded keys
+        # We extract Type (Field 1) and Comment (Field 3+)
+        if [ -s "$AUTH_KEYS" ]; then
+            KEY_SUMMARY=$(awk '{print "Type: " $1 " | Comment: " $3}' "$AUTH_KEYS")
+            whiptail --title "Current Keys for $TARGET_USER" --msgbox "The following keys are now active:\n\n$KEY_SUMMARY" 15 70
+        else
+            echo "No keys were added to the authorized_keys file."
+        fi
+        
+        # Final permission enforcement
+        chown -R "$TARGET_USER:$TARGET_USER" "$SSH_DIR"
+        echo "SSH key configuration for $TARGET_USER complete."
     fi
 fi
 
@@ -294,11 +380,13 @@ fi
 
 if [ "$DO_GIT" = true ]; then
 	# Add optional install for git (for downloaded/version controlling docker compose files)
+	# Whiptail boxes to enter user data?
 	apt install git
 	# echo git installed version xxxx
 fi
 
 whiptail --title "Success" --msgbox "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
+echo "--- Bootstrap Complete! ---"
 
 unset NEWT_COLORS
 
