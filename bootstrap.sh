@@ -289,7 +289,7 @@ if [ "$DO_KEYS" = true ]; then
         touch "$AUTH_KEYS"
         chmod 700 "$SSH_DIR"
         chmod 600 "$AUTH_KEYS"
-
+		
         # 3. Handle Deletion of Existing Keys
         if [ -s "$AUTH_KEYS" ]; then
             CHECKLIST_ITEMS=()
@@ -362,17 +362,28 @@ X11Forwarding no
 AuthenticationMethods publickey
 EOF
 	systemctl reload ssh #reload keeps current connections alive, restart will kill them if there's a syntax error in the new settings
-	
-	# add a whiptail popup here that halts installation and asks the user to check ssh login before proceeding
-	# only proceed if they say it works otherwise exit and echo to the user that they need to fix ssh before
-	# running this script again (and to not log out of this session)
 fi
 
-	# Todo:
-	# 👉 Make sure you already have SSH keys working before submitting this change otherwise you can lock yourself out
-	# detect if keys exist first?
-	# warn the user via whiptail?
-	# auto-install their public key? Add a dialog where it can be pasted in?
+# --- Safety Check Logic ---
+# This checks if any of the 'danger' sections were run
+if [ "$DO_USER" = true ] || [ "$DO_KEYS" = true ] || [ "$DO_SSH" = true ]; then
+    
+    # Define the warning message
+    WARNING_MSG="WARNING: SSH settings or users have been modified.\n\n"
+    WARNING_MSG+="Please start another INDEPENDENT SSH session now and ensure you can still log in.\n\n"
+    WARNING_MSG+="DO NOT terminate this current session until you are 100% confident that your new users, keys, and hardening settings are functioning.\n\n"
+    WARNING_MSG+="If you are locked out, you can still use this open window to fix permissions or revert changes.\n\n"
+    WARNING_MSG+="Press YES to continue with remaining bootstrap tasks, or NO to abort the script immediately."
+
+    # Display the Whiptail Warning
+    if whiptail --title "Warning: SSH Settings Modified" \
+                --yesno "$WARNING_MSG" 20 150; then
+        echo "User acknowledged SSH changes. Continuing with bootstrap..."
+    else
+        echo "Bootstrap aborted by user to verify SSH connectivity."
+        exit 1
+    fi
+fi
 	
 
 # Don't use UFW because OCI sets the defaults up with iptables and iptables-persistent we can just leave it as is
