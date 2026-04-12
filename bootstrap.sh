@@ -282,7 +282,7 @@ if [ "$DO_TS" = true ]; then
 	echo "--- Installing Tailscale ---"
 	curl -fsSL https://tailscale.com/install.sh | sh
 	tailscale up --authkey="$TS_AUTHKEY" 
-	#tailscale set --ssh	# Enable tailscale SSH - need to check if this breaks normal ssh?
+	# tailscale set --ssh	# Enable tailscale SSH - need to check if this breaks normal ssh?
 fi
 
 if [ "$DO_DOCKER" = true ]; then
@@ -293,7 +293,9 @@ if [ "$DO_DOCKER" = true ]; then
 fi
 
 if [ "$DO_GIT" = true ]; then
-	#add optional install for git (for downloaded/version controlling docker compose files)
+	# Add optional install for git (for downloaded/version controlling docker compose files)
+	apt install git
+	# echo git installed version xxxx
 fi
 
 whiptail --title "Success" --msgbox "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
