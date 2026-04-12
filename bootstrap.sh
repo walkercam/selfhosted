@@ -259,12 +259,22 @@ if [ "$DO_USER" = true ]; then
 fi
 
 if [ "$DO_KEYS" = true ]; then
-    echo "Starting SSH key configuration..."
+echo "Starting SSH key configuration..."
 
     # 1. Select the target user
-    # We pull a list of normal users (UID >= 1000) to choose from
-    USER_LIST=$(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1, ""}' /etc/passwd)
-    TARGET_USER=$(whiptail --title "Select User" --menu "Which user should receive these keys?" 15 60 5 $USER_LIST 3>&1 1>&2 2>&3)
+    # We generate a list: "username" "User" (tag and description)
+    # Using a mapfile or a loop to ensure whiptail gets the right argument count
+    USER_OPTIONS=()
+    while IFS=: read -r username _ uid _ _ _ _; do
+        if [ "$uid" -ge 1000 ] && [ "$username" != "nobody" ]; then
+            USER_OPTIONS+=("$username" "System User")
+        fi
+    done < /etc/passwd
+
+	if ! TARGET_USER=$(whiptail --title "Select User" --menu "Which user should receive these keys?" 15 60 5 "${USER_OPTIONS[@]}" 3>&1 1>&2 2>&3); then
+		echo "SSH Key addition cancelled. Stopping script here."
+		exit 0
+	fi
 
     if [ -z "$TARGET_USER" ]; then
         echo "No user selected. Skipping key addition."
