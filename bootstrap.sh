@@ -58,7 +58,7 @@ whiptail --title "Cam's VPS Bootstrap" --msgbox "This script will prepare a fres
 # --- 1. The Checklist Menu ---
 # The syntax for checklist is: [tag] [item] [status (on/off)]
 RESULTS=$(
-    whiptail --title "Mach Labs Bootstrap" --checklist \
+    whiptail --title "Cams's Bootstrap" --checklist \
     "Spacebar to select/deselect, Enter to confirm:" 20 75 10 \
     "UPDATE" "Update System (apt update/upgrade)" ON \
     "TIME"   "Set Timezone (UTC)" ON \
@@ -141,32 +141,64 @@ if [ "$DO_UPDATE" = true ]; then
 	# tmux for SSH session persistence (need to figure out how to use it!)
 	echo "--- Installing required software curl and wget ---"
 	apt-get install -y curl wget sudo
-	# add reboot if required
+	# add reboot if required - how to deal with this? we have just started our script...
 fi
 
 if [ "$DO_TIME" = true ]; then
-	#Set time and date
-	echo "--- Setting timezone ---"
-	timedatectl set-timezone "$TIMEZONE"
+    echo "--- Setting timezone ---"
+
+    TIMEZONE=$(
+        whiptail --title "Set Timezone" \
+        --inputbox "Enter your desired timezone.\n\nFormat: Region/City (e.g. Pacific/Auckland, America/New_York, Europe/London)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
+        12 65 "$TIMEZONE" \
+        3>&1 1>&2 2>&3
+    ) || {
+        echo "No timezone entered, using default: $TIMEZONE"
+    }
+
+    timedatectl set-timezone "$TIMEZONE"
+    timedatectl set-ntp true
+	
+	echo "New Timezone setting:"
+	timedatectl status
+	
+    echo "--- Timezone configuration complete ---"
 fi
 
 if [ "$DO_AUTO" = true ]; then
-	echo "--- Starting Auto Update configuration ---"
-	echo "--- Installing required update software unattended-upgrades and needrestart ---"
-	apt-get install -y unattended-upgrades needrestart
-	# Using '>' ensures we overwrite any old config in this file
-	cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-cams-custom
+    echo "--- Starting Auto Update configuration ---"
+    echo "--- Installing required update software: unattended-upgrades, needrestart ---"
+    apt-get install -y unattended-upgrades needrestart
+
+    REBOOT_TIME=$(
+        whiptail --title "Auto Update Reboot Time" \
+        --inputbox "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time (e.g. 02:00 for 2am, 14:30 for 2:30pm).\n\nNote: This only applies if updates require a reboot." \
+        12 60 "$REBOOT_TIME" \
+        3>&1 1>&2 2>&3
+    ) || {
+        echo "No reboot time entered, using default: $REBOOT_TIME"
+		#maybe this should be changed to exit to match the rest of the script behaviour (cancel = exit immediately)?
+    }
+
+    # Using '>' ensures we overwrite any old config in this file
+    cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-cams-bootstrap
 // Overwritten by Cams Bootstrap Script
-// Any manual changes made here will be overwritten if the bootstrap script is ever run again
+// Manual changes here will be lost if the bootstrap script is run again
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
 Unattended-Upgrade::Automatic-Reboot-Time "$REBOOT_TIME";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 EOF
 
-	# Configure needrestart for automatic mode	
-	sed -i "s/#\$nrconf{restart} = 'i';/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+    install -d -m 755 /etc/needrestart/conf.d
+    cat <<EOF > /etc/needrestart/conf.d/cams-bootstrap.conf
+# Managed by Cams Bootstrap Script
+\$nrconf{restart} = 'a';
+EOF
+
+    echo "--- Auto Update configuration complete ---"
 fi
 
 if [ "$DO_HOST" = true ]; then
@@ -349,19 +381,33 @@ fi
 
 # SSH Hardening
 if [ "$DO_SSH" = true ]; then
+	# add whiptail yes no for do you want to install Tmux for persistent SSH sessions?
 	echo "--- Installing Tmux for persistent SSH sessions ---"
 	apt-get install -y tmux
 	install -d -m 755 /etc/ssh/sshd_config.d
-	cat <<EOF > /etc/ssh/sshd_config.d/99-hardening.conf
+	cat <<EOF > /etc/ssh/sshd_config.d/99-hardening-cams-bootstrap.conf
 PasswordAuthentication no
 PermitRootLogin no
 PubkeyAuthentication yes
 PermitEmptyPasswords no
 KbdInteractiveAuthentication no
-X11Forwarding no
+X11Forwarding no         # Disable GUI remoting to reduce attack surface
 AuthenticationMethods publickey
+
+# Connection Stability & Cleanup
+TCPKeepAlive yes         # Detect if the remote hardware/network has physically failed
+ClientAliveInterval 300  # Send encrypted 'are you there?' heartbeat every 5 mins
+ClientAliveCountMax 2    # Terminate if 2 heartbeats are missed (cleans up ghost sessions)
 EOF
-	systemctl reload ssh #reload keeps current connections alive, restart will kill them if there's a syntax error in the new settings
+	
+	# Validate syntax before reloading
+    if sshd -t; then
+        systemctl reload ssh #reload keeps current connections alive, restart will kill them if there's a syntax error in the new settings
+        echo "SSH hardening applied and service reloaded."
+    else
+        whiptail --msgbox "SSH Configuration syntax error! SSH has not been reloaded." 10 60
+		echo "SSH Configuration syntax error! SSH has not been reloaded."
+    fi
 fi
 
 # --- Safety Check Logic ---
@@ -384,9 +430,31 @@ if [ "$DO_USER" = true ] || [ "$DO_KEYS" = true ] || [ "$DO_SSH" = true ]; then
         exit 1
     fi
 fi
+
+if [ "$DO_LOGS" = true ]; then
+    echo "Configuring systemd journal log management..."
+	install -d -m 755 /etc/systemd/journald.conf.d	# create the folder if it doesn't exist
+    cat <<EOF > /etc/systemd/journald.conf.d/cams-bootstrap.conf
+[Journal]
+# Cap total disk usage for logs
+SystemMaxUse=500M
+# Soft limit - start rotating before hitting the hard cap
+SystemKeepFree=200M
+# Max size of a single journal file before rotation
+SystemMaxFileSize=50M
+# Retain logs for a maximum of 4 weeks
+MaxRetentionSec=4weeks
+# Compress journal files
+Compress=yes
+EOF
+    systemctl reload systemd-journald
+    journalctl --vacuum-size=500M
+    journalctl --vacuum-time=4weeks
+    echo "Log management configured."
+fi
 	
 
-# Don't use UFW because OCI sets the defaults up with iptables and iptables-persistent we can just leave it as is
+# Don't use UFW if on OCI because OCI sets the defaults up with iptables and iptables-persistent - we can just leave it as is
 if [ "$DO_UFW" = true ]; then
     echo "Installing UFW and setting default rules..."
     apt-get install -y ufw
@@ -416,6 +484,85 @@ if [ "$DO_GIT" = true ]; then
 	# Whiptail boxes to enter user data?
 	apt install git
 	# echo git installed version xxxx
+fi
+
+if [ "$DO_SERVICES" = true ]; then
+    # Build checklist: "service" "description" "default_state"
+    local choices
+    choices=$(whiptail --title "Disable Unneeded Services" \
+        --checklist "Select services to disable (SPACE to toggle, ENTER to confirm):\nAll are safe defaults for a headless homelab server." \
+        28 72 15 \
+        "bluetooth"        "Bluetooth stack - useless on most VMs/VPS"           ON  \
+        "cups"             "Printing service - not needed on servers"             ON  \
+        "cups-browsed"     "Network printer discovery"                            ON  \
+        "avahi-daemon"     "mDNS/Bonjour discovery - convenience, not security"  ON  \
+        "ModemManager"     "Mobile broadband modems - rarely needed"             ON  \
+        "wpa_supplicant"   "WiFi auth - unnecessary on wired/VM servers"         ON  \
+        "snapd"            "Snap package daemon - heavy, optional"               OFF \
+        "multipathd"       "Disk multipath - only needed for enterprise SAN"     ON  \
+        "apport"           "Ubuntu crash reporting - noisy, phones home"         ON  \
+        "whoopsie"         "Ubuntu error reporting to Canonical"                 ON  \
+        "motd-news"        "Fetches news for MOTD - unnecessary outbound call"   ON  \
+        "iscsid"           "iSCSI initiator - only needed for iSCSI storage"     OFF \
+        3>&1 1>&2 2>&3)
+
+    local exit_status=$?
+    if [[ $exit_status -ne 0 ]]; then
+        echo "Skipping service hardening."
+        return
+    fi
+
+    # Strip quotes from whiptail output
+    local selected
+    selected=$(echo "$choices" | tr -d '"')
+
+    for service in $selected; do
+        if systemctl list-unit-files --state=enabled | grep -q "^${service}.service"; then
+            echo "Disabling: $service"
+            sudo systemctl disable --now "$service" 2>/dev/null || true
+        else
+            echo "Skipping $service (not found or already disabled)"
+        fi
+    done
+
+    echo "Service hardening complete."
+fi
+
+if [ "$DO_CONVENIENCE" = true ]; then
+    local choices
+    choices=$(whiptail --title "Install Convenience Tools" \
+        --checklist "Select tools to install (SPACE to toggle, ENTER to confirm):" \
+        28 72 12 \
+        "htop"        "Interactive process viewer - better than top"              ON  \
+        "ncdu"        "Disk usage analyser - find what's eating your space"       ON  \
+        "curl"        "HTTP client - essential for scripts and API calls"          ON  \
+        "wget"        "File downloader - complements curl"                         ON  \
+        "git"         "Version control - needed for pulling configs/dotfiles"      ON  \
+        "tmux"        "Terminal multiplexer - persist sessions over SSH"           ON  \
+        "ufw"         "Uncomplicated Firewall - friendly iptables wrapper"         ON  \
+        "fail2ban"    "Bans IPs with repeated failed logins"                       ON  \
+        "unattended-upgrades" "Auto security patches - set and forget"            ON  \
+        "net-tools"   "ifconfig, netstat etc - old but handy for debugging"        OFF \
+        "glances"     "Richer system dashboard - heavier than htop"                OFF \
+        "tree"        "Visual directory tree - small but handy"                    ON  \
+        3>&1 1>&2 2>&3)
+
+    local exit_status=$?
+    if [[ $exit_status -ne 0 ]]; then
+        echo "Skipping convenience tools."
+        return
+    fi
+
+    local selected
+    selected=$(echo "$choices" | tr -d '"')
+
+    if [[ -n "$selected" ]]; then
+        echo "Installing selected tools..."
+        # shellcheck disable=SC2086
+        sudo apt install -y $selected
+    fi
+
+    echo "Tool installation complete."
 fi
 
 whiptail --title "Success" --msgbox "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
