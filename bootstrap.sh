@@ -310,7 +310,7 @@ if [ "$DO_TIME" = true ]; then
     while true; do
         if ! TIMEZONE=$(whiptail_input "Set Timezone" \
             "Enter your desired timezone (current timezone displayed).\n\nFormat: Region/City (e.g. Pacific/Auckland, Europe/London, UTC)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
-            20 100 "$CURRENT_TZ"); then
+            20 80 "$CURRENT_TZ"); then
             
             echo "Cancelled. Skipping timezone setup"
             break
@@ -342,18 +342,13 @@ if [ "$DO_AUTO" = true ]; then
     echo "--- Installing required update software: unattended-upgrades, needrestart ---"
     apt_install unattended-upgrades needrestart
 
-    REBOOT_TIME=$(
-        whiptail_input "Auto Update Reboot Time" \
+    if ! REBOOT_TIME=$(whiptail_input "Auto Update Reboot Time" \
         "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
-        12 60 "$REBOOT_TIME"
-    ) || {
-        echo "No reboot time entered, using default: $REBOOT_TIME"
-		#maybe this should be changed to exit to match the rest of the script behaviour (cancel = exit immediately)?
-    }
-
-    # Using '>' ensures we overwrite any old config in this file
-    cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-cams-bootstrap
-// Overwritten by Cam's Bootstrap Script
+        12 60 "$REBOOT_TIME"); then
+        echo "Cancelled. Skipping Auto Update configuration"
+	else
+		cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-bootstrap # Using '>' ensures we overwrite any old config in this file
+// Overwritten by Bootstrap Script
 // Manual changes here will be lost if the bootstrap script is run again
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
@@ -362,12 +357,17 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 EOF
+		echo "Unattended-Upgrade settings applied to /etc/apt/apt.conf.d/99-unattended-upgrades-bootstrap"
+		echo apt-config dump | grep "Unattended-Upgrade::Automatic-Reboot-Time"
 
-    install -d -m 755 /etc/needrestart/conf.d
-    cat <<EOF > /etc/needrestart/conf.d/cams-bootstrap.conf
-# Managed by Cam's Bootstrap Script
+		install -d -m 755 /etc/needrestart/conf.d
+		cat <<EOF > /etc/needrestart/conf.d/bootstrap.conf
+# Managed by Bootstrap Script
+# Manual changes here will be lost if the bootstrap script is run again
 \$nrconf{restart} = 'a';
 EOF
+		echo "Needrestart settings applied to /etc/needrestart/conf.d/bootstrap.conf"
+	fi
 
     echo "--- Auto Update configuration complete ---"
 fi
