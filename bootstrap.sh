@@ -342,12 +342,23 @@ if [ "$DO_AUTO" = true ]; then
     echo "--- Installing required update software: unattended-upgrades, needrestart ---"
     apt_install unattended-upgrades needrestart
 
-    if ! REBOOT_TIME=$(whiptail_input "Auto Update Reboot Time" \
-        "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
-        12 60 "$REBOOT_TIME"); then
-        echo "Cancelled. Skipping Auto Update configuration"
-	else
-		cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-bootstrap # Using '>' ensures we overwrite any old config in this file
+	while true; do
+		if ! REBOOT_TIME=$(whiptail_input "Auto Update Reboot Time" \
+			"Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
+			12 60 "$REBOOT_TIME"); then
+			echo "Cancelled. Skipping Auto Update configuration"
+			break
+		else
+			# Regex for HH:MM (00:00 through 23:59)
+			TIME_REGEX="^([01][0-9]|2[0-3]):[0-5][0-9]$"
+
+			if [[ ! $REBOOT_TIME =~ $TIME_REGEX ]]; then
+				echo "Error: REBOOT_TIME '$REBOOT_TIME' is invalid."
+				whiptail_msgbox "Error" "REBOOT_TIME '$REBOOT_TIME' is invalid. Please try again" 8 60
+				continue
+			fi	
+		
+			cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-bootstrap # Using '>' ensures we overwrite any old config in this file
 // Overwritten by Bootstrap Script
 // Manual changes here will be lost if the bootstrap script is run again
 Unattended-Upgrade::Automatic-Reboot "true";
@@ -357,19 +368,23 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 EOF
-		echo "Unattended-Upgrade settings applied to /etc/apt/apt.conf.d/99-unattended-upgrades-bootstrap"
-		
-		REBOOT_CHECK=$(apt-config dump | awk -F'"' '/Unattended-Upgrade::Automatic-Reboot-Time/ {print $2}')
-		echo "The configured reboot time is: $REBOOT_CHECK"
+			echo "Unattended-Upgrade settings applied to /etc/apt/apt.conf.d/99-unattended-upgrades-bootstrap"
+			
+			REBOOT_CHECK=$(apt-config dump | awk -F'"' '/Unattended-Upgrade::Automatic-Reboot-Time/ {print $2}')
+			echo "The configured reboot time is: $REBOOT_CHECK"
 
-		install -d -m 755 /etc/needrestart/conf.d
-		cat <<EOF > /etc/needrestart/conf.d/bootstrap.conf
+			install -d -m 755 /etc/needrestart/conf.d
+			cat <<EOF > /etc/needrestart/conf.d/bootstrap.conf
 # Managed by Bootstrap Script
 # Manual changes here will be lost if the bootstrap script is run again
 \$nrconf{restart} = 'a';
 EOF
-		echo "Needrestart settings applied to /etc/needrestart/conf.d/bootstrap.conf"
-	fi
+
+			echo "Needrestart settings applied to /etc/needrestart/conf.d/bootstrap.conf"
+		fi
+		break
+	
+	done
 
     echo "--- Auto Update configuration complete ---"
 fi
