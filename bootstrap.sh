@@ -379,11 +379,9 @@ EOF
 # Manual changes here will be lost if the bootstrap script is run again
 \$nrconf{restart} = 'a';
 EOF
-
 			echo "Needrestart settings applied to /etc/needrestart/conf.d/bootstrap.conf"
 		fi
 		break
-	
 	done
 
     echo "--- Auto Update configuration complete ---"
@@ -392,12 +390,12 @@ fi
 if [ "$DO_HOST" = true ]; then
 	echo "--- Starting Hostname configuration ---"
 	
-	NEW_HOSTNAME=$(hostnamectl --static 2>/dev/null || hostname) # Grab the current hostname as the 'default'
-	
     while true; do
-        NEW_HOSTNAME=$(whiptail_input "" "Enter hostname (current shown):" 10 60 "$NEW_HOSTNAME") || {
-            echo "Hostname entry cancelled. Exiting."
-            exit 1
+        NEW_HOSTNAME=$(hostnamectl --static 2>/dev/null || hostname) # Grab the current hostname as the 'default'
+		
+		NEW_HOSTNAME=$(whiptail_input "" "Enter hostname (current shown):" 10 60 "$NEW_HOSTNAME") || {
+            echo "Hostname entry cancelled. Skipping."
+            break
         }
 
         # Check empty
@@ -424,15 +422,15 @@ if [ "$DO_HOST" = true ]; then
         fi
 
         # If we got here, it's valid
+		hostnamectl set-hostname "$NEW_HOSTNAME"	
+		if grep -qE '^127\.0\.1\.1\s+' /etc/hosts; then
+			sed -i -E "s/^127\.0\.1\.1\s+.*/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts
+		else
+			printf '127.0.1.1\t%s\n' "$NEW_HOSTNAME" >> /etc/hosts
+		fi
+	
         break
     done
-	
-	hostnamectl set-hostname "$NEW_HOSTNAME"	
-    if grep -qE '^127\.0\.1\.1\s+' /etc/hosts; then
-        sed -i -E "s/^127\.0\.1\.1\s+.*/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts
-    else
-        printf '127.0.1.1\t%s\n' "$NEW_HOSTNAME" >> /etc/hosts
-    fi
 	
 	echo "Hostname set to: $NEW_HOSTNAME"
 fi
