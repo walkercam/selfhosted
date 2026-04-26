@@ -101,7 +101,8 @@ trap 'echo "===== Bootstrap finished at $(date) ====="' EXIT
 
 # Debug tracing
 if [[ "$DEBUG" == "1" ]]; then
-    PS4='+ $(date "+%Y-%m-%d %H:%M:%S") [${BASH_SOURCE##*/}:${LINENO}] '
+    # The :- construct prevents "unbound variable" errors
+    PS4='+ $(date "+%Y-%m-%d %H:%M:%S") [${BASH_SOURCE[0]:-stdin}:${LINENO}] '
     set -x
 fi
 
