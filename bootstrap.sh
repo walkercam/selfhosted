@@ -13,7 +13,7 @@ REBOOT_TIME="02:00"
 NEW_USER="cam"
 NEW_HOSTNAME=""
 TS_AUTHKEY=""
-DEBUG="1"
+DEBUG="0"
 
 ensure_apt_updated() {
     if [[ "$APT_UPDATED" != true ]]; then
