@@ -390,10 +390,11 @@ fi
 if [ "$DO_HOST" = true ]; then
 	echo "--- Starting Hostname configuration ---"
 	
+    CURRENT_HOSTNAME=$(hostnamectl --static 2>/dev/null || hostname) # Grab the current hostname as the 'default'
+	echo "Current hostname is: $CURRENT_HOSTNAME"	
+	
     while true; do
-        NEW_HOSTNAME=$(hostnamectl --static 2>/dev/null || hostname) # Grab the current hostname as the 'default'
-		
-		NEW_HOSTNAME=$(whiptail_input "" "Enter hostname (current shown):" 10 60 "$NEW_HOSTNAME") || {
+		NEW_HOSTNAME=$(whiptail_input "" "Enter hostname (current shown):" 10 60 "$CURRENT_HOSTNAME") || {
             echo "Hostname entry cancelled. Skipping."
             break
         }
@@ -404,13 +405,13 @@ if [ "$DO_HOST" = true ]; then
             continue
         fi
 
-        # Validate format (simple, safe subset)
+        # Validate format
         if ! [[ "$NEW_HOSTNAME" =~ ^[a-z0-9-]+$ ]]; then
             whiptail_msgbox "" "Invalid hostname. Use only lowercase letters, numbers, and hyphens." 8 60
             continue
         fi
 
-        # Optional: stricter rules (recommended)
+        # Stricter rules. No hyphens at start or end
         if [[ "$NEW_HOSTNAME" =~ ^- || "$NEW_HOSTNAME" =~ -$ ]]; then
             whiptail_msgbox "" "Hostname cannot start or end with a hyphen." 8 60
             continue
@@ -428,11 +429,10 @@ if [ "$DO_HOST" = true ]; then
 		else
 			printf '127.0.1.1\t%s\n' "$NEW_HOSTNAME" >> /etc/hosts
 		fi
+		echo "Hostname set to: $NEW_HOSTNAME"
 	
         break
     done
-	
-	echo "Hostname set to: $NEW_HOSTNAME"
 fi
 
 # Need to compare with chatgpts suggestion
