@@ -306,20 +306,19 @@ if [ "$DO_TIME" = true ]; then
 	
 	TIMEZONE=$(timedatectl show -p Timezone --value)
 
-    TIMEZONE=$(
-        whiptail_input "Set Timezone" \
+    if ! TIMEZONE=$(whiptail_input "Set Timezone" \
         "Enter your desired timezone (current timezone displayed).\n\nFormat: Region/City (e.g. Pacific/Auckland, Europe/London, UTC)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
-        20 100 "$TIMEZONE"
-    ) || {
-        echo "No timezone entered, using default: $TIMEZONE"
+        20 200 "$TIMEZONE"); then
+		
+        echo "Skipping timezone setup"
     }
-	# cancel was selected so it sets timezone to ""? and it will then fail. needs better behaviour
-
-    timedatectl set-timezone "$TIMEZONE"
-    timedatectl set-ntp true
-	
-	echo "New Timezone setting:"
-	timedatectl status
+		else
+		timedatectl set-timezone "$TIMEZONE"
+		timedatectl set-ntp true
+		
+		echo "New Timezone setting:"
+		timedatectl status
+	fi
 	
     echo "--- Timezone configuration complete ---"
 fi
