@@ -303,22 +303,37 @@ fi
 
 if [ "$DO_TIME" = true ]; then
     echo "--- Setting timezone ---"
-	
-	TIMEZONE=$(timedatectl show -p Timezone --value)
+    
+    # Get current timezone for the default value
+    CURRENT_TZ=$(timedatectl show -p Timezone --value)
 
-    if ! TIMEZONE=$(whiptail_input "Set Timezone" \
-        "Enter your desired timezone (current timezone displayed).\n\nFormat: Region/City (e.g. Pacific/Auckland, Europe/London, UTC)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
-        20 200 "$TIMEZONE"); then
-		
-        echo "Skipping timezone setup"
-	else
-		timedatectl set-timezone "$TIMEZONE"
-		timedatectl set-ntp true
-		
-		echo "New Timezone setting:"
-		timedatectl status
-	fi
-	
+    while true; do
+        if ! TIMEZONE=$(whiptail_input "Set Timezone" \
+            "Enter your desired timezone (current timezone displayed).\n\nFormat: Region/City (e.g. Pacific/Auckland, Europe/London, UTC)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
+            20 100 "$CURRENT_TZ"); then
+            
+            echo "Cancelled. Skipping timezone setup"
+            break
+        fi
+
+        if [ -z "$TIMEZONE" ]; then
+            whiptail_msgbox "Error" "Timezone cannot be empty. Please try again." 8 45
+            continue # Re-run the loop to show the input box again
+        fi
+
+        if timedatectl set-timezone "$TIMEZONE" 2>/dev/null; then
+            timedatectl set-ntp true
+            echo "Successfully set timezone to: $TIMEZONE"
+            echo "New Timezone setting:"
+            timedatectl status
+            break # Exit the loop
+        else
+            echo "Error: '$TIMEZONE' is not a valid timezone."
+            whiptail_msgbox "Error" "'$TIMEZONE' is not a recognized timezone. Please check the format (e.g., Region/City)." 8 60
+            continue # Re-run the loop to let the user fix the error
+        fi
+    done
+    
     echo "--- Timezone configuration complete ---"
 fi
 
@@ -327,7 +342,8 @@ if [ "$DO_AUTO" = true ]; then
     echo "--- Installing required update software: unattended-upgrades, needrestart ---"
     apt_install unattended-upgrades needrestart
 
-    REBOOT_TIME=$(whiptail_input "Auto Update Reboot Time" \
+    REBOOT_TIME=$(
+        whiptail_input "Auto Update Reboot Time" \
         "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
         12 60 "$REBOOT_TIME"
     ) || {
