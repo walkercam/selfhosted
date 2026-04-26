@@ -105,7 +105,7 @@ if [[ "$DEBUG" == "1" ]]; then
     set -x
 fi
 
-echo "Logging to: $(LOGFILE)"
+echo "Logging to: ${LOGFILE}"
 echo "===== Bootstrap started at $(date) ====="
 echo "User: $(whoami)"
 echo "Hostname: $(hostname)"
