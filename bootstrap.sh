@@ -709,7 +709,7 @@ if [ "$DO_GIT" = true ]; then
 	# echo git installed version xxxx
 fi
 
-if [ "${OPT[SERVICES]}" = true ]; then
+if [ "$DO_SERVICES" = true ]; then
     echo "Starting service hardening..."
 
     if ! SERVICE_CHOICES=$(whiptail_checklist "Disable Unneeded Services" \
@@ -747,7 +747,7 @@ if [ "${OPT[SERVICES]}" = true ]; then
     fi
 fi
 
-if [ "${OPT[CONVENIENCE]}" = true ]; then
+if [ "$DO_CONVENIENCE" = true ]; then
     echo "Installing convenience tools..."
 
     if ! CONVENIENCE_CHOICES=$(whiptail_checklist "Install Convenience Tools" \
