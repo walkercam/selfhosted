@@ -2,17 +2,51 @@
 
 # ==============================================================================
 # Cam's Interactive VPS Bootstrap
-# Uses whiptail for that "Proxmox-style" feel.
 # Run this by running the command below in the shell:
 # sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/walkercam/selfhosted/refs/heads/main/bootstrap.sh)"
 # ==============================================================================
 
-#TODO:
-#Add logging
-#Add dry run mode
+APT_UPDATED=false
+TIMEZONE="Pacific/Auckland"
+STACK_DIR="/opt/stacks"
+REBOOT_TIME="02:00"
+NEW_USER="cam"
+NEW_HOSTNAME=""
+TS_AUTHKEY=""
+DEBUG="1"
+
+ensure_apt_updated() {
+    if [[ "$APT_UPDATED" != true ]]; then
+        echo "Updating apt package lists..."
+        apt-get update
+        APT_UPDATED=true
+    fi
+}
+
+apt_install() {
+    ensure_apt_updated
+
+    local missing=()
+
+    for pkg in "$@"; do
+        if dpkg -s "$pkg" >/dev/null 2>&1; then
+            echo "$pkg already installed"
+        else
+            missing+=("$pkg")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Installing: ${missing[*]}"
+        apt-get install -y "${missing[@]}"
+    else
+        echo "All packages already installed"
+    fi
+}
 
 set -euo pipefail #exit on errors - don't just try to continue
 
+export DEBIAN_FRONTEND=noninteractive
 #Set the newt colours so we have consistent whiptail appearance
 export NEWT_COLORS='	
   root=white, blue
@@ -40,89 +74,115 @@ export NEWT_COLORS='
   sellistbox=black, brown
 '
 
-TIMEZONE="Pacific/Auckland"
-STACK_DIR="/opt/stacks"
-REBOOT_TIME="02:00"
-LOG_FILE="/var/log/bootstrap.log"
-NEW_USER="cam"
-
-#Check that we have sudo 
+# Check that we have sudo 
 if [ "$EUID" -ne 0 ]; then
     echo "Please run this script as root (use sudo)."
     exit 1
 fi
 
-# 1. Welcome Message
+# Generate timestamp for this run
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+
+LOGDIR="/var/log/bootstrap"
+LOGFILE="${LOGDIR}/bootstrap-${TIMESTAMP}.log"
+
+mkdir -p "$LOGDIR"
+touch "$LOGFILE"
+chmod 600 "$LOGFILE"
+
+ln -sf "$LOGFILE" "${LOGDIR}/bootstrap-latest.log"
+
+# Redirect all output
+exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | tee -a "$LOGFILE") 2>&1
+
+# Error + exit handling
+trap 'echo "ERROR: Script failed at line $LINENO with exit code $?"' ERR
+trap 'echo "===== Bootstrap finished at $(date) ====="' EXIT
+
+# Debug tracing
+if [[ "$DEBUG" == "1" ]]; then
+    PS4='+ $(date "+%Y-%m-%d %H:%M:%S") [${BASH_SOURCE##*/}:${LINENO}] '
+    set -x
+fi
+
+echo "Logging to: $LOGFILE"
+echo "===== Bootstrap started at $(date) ====="
+echo "User: $(whoami)"
+echo "Hostname: $(hostname)"
+
+# Welcome Message
 whiptail --title "Cam's VPS Bootstrap" --msgbox "This script will prepare a fresh linux instance.\n\nTarget: Any Debian or Ubunutu Instance" 15 60
 
-# --- 1. The Checklist Menu ---
+# The Checklist Menu
 # The syntax for checklist is: [tag] [item] [status (on/off)]
 RESULTS=$(
     whiptail --title "Cams's Bootstrap" --checklist \
-    "Spacebar to select/deselect, Enter to confirm:" 20 75 10 \
-    "UPDATE" "Update System (apt update/upgrade)" ON \
-    "TIME"   "Set Timezone (UTC)" ON \
-    "AUTO"   "Enable unattended-upgrades & needrestart" ON \
-    "HOST"   "Set hostname" OFF \
-    "USER"   "Add non-root user" OFF \
-	"KEYS"	 "Add new SSH public keys" OFF \
-    "SSH"    "Harden SSH (Disable Password Auth)" OFF \
-    "UFW"    "Install and configure UFW (NOT FOR OCI)" OFF \
-    "TS"     "Install and configure Tailscale" ON \
-    "DOCKER" "Install Docker" ON \
-    "GIT"    "Install Git" OFF \
+    "Spacebar to select/deselect, Enter to confirm:" 22 75 14 \
+    "UPDATE"     "Update system (apt update/upgrade)" ON \
+    "TIME"       "Set timezone" ON \
+    "AUTO"       "Enable unattended-upgrades & needrestart" ON \
+    "HOST"       "Set hostname" OFF \
+    "USER"       "Add non-root user" OFF \
+    "KEYS"       "Add/manage SSH public keys" OFF \
+    "SSH"        "Harden SSH" OFF \
+    "UFW"        "Install and configure UFW (NOT FOR OCI)" OFF \
+    "TS"         "Install and configure Tailscale" ON \
+    "DOCKER"     "Install Docker" ON \
+    "GIT"        "Install Git" OFF \
+    "LOGS"       "Configure journald log retention" OFF \
+    "SERVICES"   "Disable unneeded services" OFF \
+    "CONVENIENCE" "Install useful admin tools" OFF \
     3>&1 1>&2 2>&3
 ) || {
     echo "Setup cancelled by user."
     exit 0
 }
 
-# --- 2. Initialize Variables (Default to false) ---
-DO_UPDATE=false
-DO_TIME=false
-DO_AUTO=false
-DO_HOST=false
-DO_USER=false
-DO_KEYS=false
-DO_SSH=false
-DO_UFW=false
-DO_TS=false
-DO_DOCKER=false
-DO_GIT=false
+# Initialize variables (Default to false)
+DO_UPDATE=false; DO_TIME=false; DO_AUTO=false; DO_HOST=false; 
+DO_USER=false; DO_KEYS=false; DO_SSH=false; DO_UFW=false; 
+DO_TS=false; DO_DOCKER=false; DO_GIT=false; DO_LOGS=false; 
+DO_SERVICES=false; DO_CONVENIENCE=false;
 
-# --- 3. Parse the Results ---
-# whiptail returns a string like: "UPDATE" "TIME" "TS"
+# Parse the results
+# Whiptail returns a string like: "UPDATE" "TIME" "TS"
 # We check if the tag exists in the RESULTS string
 # Match full tokens including quotes to avoid substring bugs
-[[ $RESULTS == *'"UPDATE"'* ]] && DO_UPDATE=true
-[[ $RESULTS == *'"TIME"'* ]]   && DO_TIME=true
-[[ $RESULTS == *'"AUTO"'* ]]   && DO_AUTO=true
-[[ $RESULTS == *'"HOST"'* ]]   && DO_HOST=true
-[[ $RESULTS == *'"USER"'* ]]   && DO_USER=true
-[[ $RESULTS == *'"KEYS"'* ]]   && DO_KEYS=true
-[[ $RESULTS == *'"SSH"'* ]]    && DO_SSH=true
-[[ $RESULTS == *'"UFW"'* ]]    && DO_UFW=true
-[[ $RESULTS == *'"TS"'* ]]     && DO_TS=true
-[[ $RESULTS == *'"DOCKER"'* ]] && DO_DOCKER=true
-[[ $RESULTS == *'"GIT"'* ]]    && DO_GIT=true
+[[ $RESULTS == *'"UPDATE"'* ]]      && DO_UPDATE=true
+[[ $RESULTS == *'"TIME"'* ]]        && DO_TIME=true
+[[ $RESULTS == *'"AUTO"'* ]]        && DO_AUTO=true
+[[ $RESULTS == *'"HOST"'* ]]        && DO_HOST=true
+[[ $RESULTS == *'"USER"'* ]]        && DO_USER=true
+[[ $RESULTS == *'"KEYS"'* ]]        && DO_KEYS=true
+[[ $RESULTS == *'"SSH"'* ]]         && DO_SSH=true
+[[ $RESULTS == *'"UFW"'* ]]         && DO_UFW=true
+[[ $RESULTS == *'"TS"'* ]]          && DO_TS=true
+[[ $RESULTS == *'"DOCKER"'* ]]      && DO_DOCKER=true
+[[ $RESULTS == *'"GIT"'* ]]         && DO_GIT=true
+[[ $RESULTS == *'"LOGS"'* ]]        && DO_LOGS=true
+[[ $RESULTS == *'"SERVICES"'* ]]    && DO_SERVICES=true
+[[ $RESULTS == *'"CONVENIENCE"'* ]] && DO_CONVENIENCE=true
 
-# --- 4. Sanity Check (Echo the list) ---
+# Sanity Check (Echo the list)
 echo "------------------------------------------"
 echo "USER SELECTIONS:"
-echo "Update System:      $DO_UPDATE"
-echo "Set Timezone:       $DO_TIME"
-echo "Auto Upgrades:      $DO_AUTO"
-echo "Set Hostname:       $DO_HOST"
-echo "Add User:           $DO_USER"
-echo "Add SSH Keys:       $DO_KEYS"
-echo "Harden SSH:         $DO_SSH"
-echo "Install UFW:        $DO_UFW"
-echo "Install Tailscale:  $DO_TS"
-echo "Install Docker:     $DO_DOCKER"
-echo "Install Git:        $DO_GIT"
+echo "Update System:      			$DO_UPDATE"
+echo "Set Timezone:       			$DO_TIME"
+echo "Auto Upgrades:      			$DO_AUTO"
+echo "Set Hostname:       			$DO_HOST"
+echo "Add User:           			$DO_USER"
+echo "Add SSH Keys:       			$DO_KEYS"
+echo "Harden SSH:         			$DO_SSH"
+echo "Install UFW:        			$DO_UFW"
+echo "Install Tailscale:  			$DO_TS"
+echo "Install Docker:     			$DO_DOCKER"
+echo "Install Git:        			$DO_GIT"
+echo "Configure logs:	  			$DO_LOGS"
+echo "Remove services:	  			$DO_SERVICES"
+echo "Install convenience software:	$DO_CONVENIENCE" 
 echo "------------------------------------------"
 
-# 4. Confirmation (Yes/No Box)
+# Confirmation (Yes/No Box)
 if whiptail --title "Confirm" --yesno "Proceed with installation?" 8 45; then
     echo "Starting deployment..."
 else
@@ -131,17 +191,20 @@ else
 fi
 
 # --- Execution Starts Here ---
-export DEBIAN_FRONTEND=noninteractive
 
 if [ "$DO_UPDATE" = true ]; then
 	echo "--- Starting System Updates ---"
-	apt-get update && apt-get upgrade -y && apt autoremove -y
-	# Install must have software
-	# curl and wget are core linux functionality
-	# tmux for SSH session persistence (need to figure out how to use it!)
-	echo "--- Installing required software curl and wget ---"
-	apt-get install -y curl wget sudo
-	# add reboot if required - how to deal with this? we have just started our script...
+	
+	ensure_apt_updated
+	
+	echo "Upgrading packages"
+	apt-get dist-upgrade -y
+
+	echo "Cleaning up unused packages"
+	apt-get autoremove -y
+	
+	echo "--- Installing core software ---"
+    apt_install curl wget sudo
 fi
 
 if [ "$DO_TIME" = true ]; then
@@ -149,7 +212,7 @@ if [ "$DO_TIME" = true ]; then
 
     TIMEZONE=$(
         whiptail --title "Set Timezone" \
-        --inputbox "Enter your desired timezone.\n\nFormat: Region/City (e.g. Pacific/Auckland, America/New_York, Europe/London)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
+        --inputbox "Enter your desired timezone.\n\nFormat: Region/City (e.g. Pacific/Auckland, Europe/London, UTC)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
         12 65 "$TIMEZONE" \
         3>&1 1>&2 2>&3
     ) || {
@@ -168,11 +231,11 @@ fi
 if [ "$DO_AUTO" = true ]; then
     echo "--- Starting Auto Update configuration ---"
     echo "--- Installing required update software: unattended-upgrades, needrestart ---"
-    apt-get install -y unattended-upgrades needrestart
+    apt_install unattended-upgrades needrestart
 
     REBOOT_TIME=$(
         whiptail --title "Auto Update Reboot Time" \
-        --inputbox "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time (e.g. 02:00 for 2am, 14:30 for 2:30pm).\n\nNote: This only applies if updates require a reboot." \
+        --inputbox "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
         12 60 "$REBOOT_TIME" \
         3>&1 1>&2 2>&3
     ) || {
@@ -182,7 +245,7 @@ if [ "$DO_AUTO" = true ]; then
 
     # Using '>' ensures we overwrite any old config in this file
     cat <<EOF > /etc/apt/apt.conf.d/99-unattended-upgrades-cams-bootstrap
-// Overwritten by Cams Bootstrap Script
+// Overwritten by Cam's Bootstrap Script
 // Manual changes here will be lost if the bootstrap script is run again
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
@@ -194,7 +257,7 @@ EOF
 
     install -d -m 755 /etc/needrestart/conf.d
     cat <<EOF > /etc/needrestart/conf.d/cams-bootstrap.conf
-# Managed by Cams Bootstrap Script
+# Managed by Cam's Bootstrap Script
 \$nrconf{restart} = 'a';
 EOF
 
@@ -202,16 +265,56 @@ EOF
 fi
 
 if [ "$DO_HOST" = true ]; then
-	# set hostname
-	# hostnamectl set-hostname your-server-name
-	# nano /etc/hosts
-	# Add: 127.0.1.1 your-server-name to that file
+	echo "--- Starting Hostname configuration ---"
 	
-	HOSTNAME=$(whiptail --inputbox "Enter hostname:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3)
+	NEW_HOSTNAME=$(hostnamectl --static 2>/dev/null || hostname) # Grab the current hostname as the 'default'
+	
+    while true; do
+        NEW_HOSTNAME=$(whiptail --inputbox "Enter hostname (current shown):" 10 60 "$NEW_HOSTNAME" 3>&1 1>&2 2>&3) || {
+            echo "Hostname entry cancelled. Exiting."
+            exit 1
+        }
+
+        # Check empty
+        if [ -z "$NEW_HOSTNAME" ]; then
+            whiptail --msgbox "Hostname cannot be empty." 8 40
+            continue
+        fi
+
+        # Validate format (simple, safe subset)
+        if ! [[ "$NEW_HOSTNAME" =~ ^[a-z0-9-]+$ ]]; then
+            whiptail --msgbox "Invalid hostname. Use only lowercase letters, numbers, and hyphens." 8 60
+            continue
+        fi
+
+        # Optional: stricter rules (recommended)
+        if [[ "$NEW_HOSTNAME" =~ ^- || "$NEW_HOSTNAME" =~ -$ ]]; then
+            whiptail --msgbox "Hostname cannot start or end with a hyphen." 8 60
+            continue
+        fi
+
+        if [ ${#NEW_HOSTNAME} -gt 63 ]; then
+            whiptail --msgbox "Hostname must be 63 characters or less." 8 60
+            continue
+        fi
+
+        # If we got here, it's valid
+        break
+    done
+	
+	hostnamectl set-hostname "$NEW_HOSTNAME"	
+    if grep -qE '^127\.0\.1\.1\s+' /etc/hosts; then
+        sed -i -E "s/^127\.0\.1\.1\s+.*/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts
+    else
+        printf '127.0.1.1\t%s\n' "$NEW_HOSTNAME" >> /etc/hosts
+    fi
+	
+	echo "Hostname set to: $NEW_HOSTNAME"
 fi
 
+# Need to compare with chatgpts suggestion
 if [ "$DO_USER" = true ]; then
-    echo "Creating new user..."
+	echo "--- Creating new user ---"	
 
     # Prompt for username (with default)
 	if ! NEW_USER=$(whiptail --inputbox "Enter new username:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3); then
@@ -236,7 +339,7 @@ if [ "$DO_USER" = true ]; then
 				exit 0
 			fi
 
-			if [ -z "$PASSWORD1" ]; then
+			if [ -z "$PASSWORD1" ]; then 
 				whiptail --msgbox "Password cannot be empty. Try again." 8 40
 				continue
 			fi
@@ -256,9 +359,7 @@ if [ "$DO_USER" = true ]; then
 
         echo "$NEW_USER:$PASSWORD1" | chpasswd
 		unset PASSWORD1 PASSWORD2 # Remove plain text passwords from memory
-
-        # Add to sudo group
-        usermod -aG sudo "$NEW_USER"
+        usermod -aG sudo "$NEW_USER" # Add to sudo group
 
         # Prepare .ssh directory
         mkdir -p /home/"$NEW_USER"/.ssh
@@ -290,8 +391,9 @@ if [ "$DO_USER" = true ]; then
     fi
 fi
 
+# Need to compare with chatgpts suggestion
 if [ "$DO_KEYS" = true ]; then
-    echo "Starting SSH key configuration..."
+    echo "--- Starting SSH key configuration ---"
 
     while true; do
         # 1. Build the target user list
@@ -309,9 +411,7 @@ if [ "$DO_KEYS" = true ]; then
 			exit 0
 		fi
 	
-        if [ "$TARGET_USER" = "DONE" ]; then
-            break
-        fi
+		if [ "$TARGET_USER" = "DONE" ]; then break; fi
 
         # 2. Identify Paths
         USER_HOME=$(eval echo "~$TARGET_USER")
@@ -379,11 +479,27 @@ if [ "$DO_KEYS" = true ]; then
     echo "SSH Key Management section complete."
 fi
 
+# Needs work on the tmux part. Maybe that should have its own section?
 # SSH Hardening
 if [ "$DO_SSH" = true ]; then
 	# add whiptail yes no for do you want to install Tmux for persistent SSH sessions?
 	echo "--- Installing Tmux for persistent SSH sessions ---"
-	apt-get install -y tmux
+	apt_install tmux
+	
+	
+	# Inject Tmux auto-attach into .bashrc safely (interactive SSH sessions only)
+#    if ! grep -q "tmux attach-session" /home/"$NEW_USER"/.bashrc; then
+#        cat << 'EOF' >> /home/"$NEW_USER"/.bashrc
+#
+# Auto-attach to tmux for interactive SSH sessions
+# if [[ $- =~ i ]] && [[ -z "$TMUX" ]] && [[ -n "$SSH_TTY" ]]; then
+#    tmux attach-session -t default || tmux new-session -s default
+# fi
+# EOF
+#    fi
+	
+	
+	
 	install -d -m 755 /etc/ssh/sshd_config.d
 	cat <<EOF > /etc/ssh/sshd_config.d/99-hardening-cams-bootstrap.conf
 PasswordAuthentication no
@@ -401,17 +517,16 @@ ClientAliveCountMax 2    # Terminate if 2 heartbeats are missed (cleans up ghost
 EOF
 	
 	# Validate syntax before reloading
-    if sshd -t; then
-        systemctl reload ssh #reload keeps current connections alive, restart will kill them if there's a syntax error in the new settings
+    if command -v sshd >/dev/null 2>&1 && sshd -t; then
+        systemctl reload ssh 2>/dev/null
         echo "SSH hardening applied and service reloaded."
     else
-        whiptail --msgbox "SSH Configuration syntax error! SSH has not been reloaded." 10 60
-		echo "SSH Configuration syntax error! SSH has not been reloaded."
+        whiptail --msgbox "SSH configuration syntax error. SSH has not been reloaded." 10 60
+        echo "SSH configuration syntax error. SSH has not been reloaded."
     fi
 fi
 
-# --- Safety Check Logic ---
-# This checks if any of the 'danger' sections were run
+# Safety check logic. This checks if any of the 'danger' sections were run
 if [ "$DO_USER" = true ] || [ "$DO_KEYS" = true ] || [ "$DO_SSH" = true ]; then
     
     # Define the warning message
@@ -422,8 +537,7 @@ if [ "$DO_USER" = true ] || [ "$DO_KEYS" = true ] || [ "$DO_SSH" = true ]; then
     WARNING_MSG+="Press YES to continue with remaining bootstrap tasks, or NO to abort the script immediately."
 
     # Display the Whiptail Warning
-    if whiptail --title "Warning: SSH Settings Modified" \
-                --yesno "$WARNING_MSG" 20 150; then
+    if whiptail --title "Warning: SSH Settings Modified" --yesno "$WARNING_MSG" 20 150; then
         echo "User acknowledged SSH changes. Continuing with bootstrap..."
     else
         echo "Bootstrap aborted by user to verify SSH connectivity."
@@ -432,7 +546,7 @@ if [ "$DO_USER" = true ] || [ "$DO_KEYS" = true ] || [ "$DO_SSH" = true ]; then
 fi
 
 if [ "$DO_LOGS" = true ]; then
-    echo "Configuring systemd journal log management..."
+    echo "--- Configuring systemd journal log management ---"
 	install -d -m 755 /etc/systemd/journald.conf.d	# create the folder if it doesn't exist
     cat <<EOF > /etc/systemd/journald.conf.d/cams-bootstrap.conf
 [Journal]
@@ -447,128 +561,149 @@ MaxRetentionSec=4weeks
 # Compress journal files
 Compress=yes
 EOF
-    systemctl reload systemd-journald
-    journalctl --vacuum-size=500M
-    journalctl --vacuum-time=4weeks
-    echo "Log management configured."
+    systemctl reload systemd-journald || true
+    journalctl --vacuum-size=500M || true
+    journalctl --vacuum-time=4weeks || true
+    echo "--- Log management configuration complete ---"
 fi
-	
 
 # Don't use UFW if on OCI because OCI sets the defaults up with iptables and iptables-persistent - we can just leave it as is
 if [ "$DO_UFW" = true ]; then
     echo "Installing UFW and setting default rules..."
-    apt-get install -y ufw
+    apt_install ufw
 	ufw default deny incoming
 	ufw default allow outbound
 	ufw allow 22/tcp
-    ufw allow in on tailscale0 # Allow all traffic over Tailscale
     ufw --force enable	
 fi
 
 if [ "$DO_TS" = true ]; then
 	echo "--- Installing Tailscale ---"
-	curl -fsSL https://tailscale.com/install.sh | sh
-	tailscale up --authkey="$TS_AUTHKEY" 
-	# tailscale set --ssh	# Enable tailscale SSH - need to check if this breaks normal ssh?
+	
+	# 1. Capture Auth Key (Optional)
+	TS_AUTHKEY=$(whiptail --title "Tailscale Auth" --passwordbox "Enter your Tailscale Auth Key (leave blank for manual auth link):" 10 65 3>&1 1>&2 2>&3) || true
+	TS_AUTHKEY=$(echo "$TS_AUTHKEY" | xargs) # Trim whitespace and newlines
+
+	# 2. Run official install script	
+	curl -fsSL https://tailscale.com/install.sh | sh 
+	until tailscale status >/dev/null 2>&1; do
+		echo "Waiting for TasilScale to be responsive. Could be a firewall issue"
+		sleep 1
+	done
+	
+	# 3. Bring Tailscale up
+    if [ -n "$TS_AUTHKEY" ]; then
+        tailscale up --authkey="$TS_AUTHKEY" --ssh --accept-dns=true# turning on TS SSH should always be a good thing
+    else
+        echo "No Auth Key provided. Please follow the link above to authenticate."
+        tailscale up --ssh --accept-dns=true|| echo "WARNING: tailscale up may have failed"
+    fi
+
+    # Firewall logic removed. Tailscale can handle it's own rules for UFW or iptables
 fi
 
 if [ "$DO_DOCKER" = true ]; then
 	echo "--- Installing Docker ---"
 	curl -fsSL https://get.docker.com | sh
 	# Make a home for docker stacks -p create parent directories and will not error is this directory already exists
-	mkdir -p "$STACK_DIR"
+	mkdir -p "$STACK_DIR" #should we be using install rather than mkdir like in do_logs section?
 fi
 
+# Needs work
 if [ "$DO_GIT" = true ]; then
 	# Add optional install for git (for downloaded/version controlling docker compose files)
 	# Whiptail boxes to enter user data?
-	apt install git
+	apt_install git
 	# echo git installed version xxxx
 fi
 
-if [ "$DO_SERVICES" = true ]; then
-    # Build checklist: "service" "description" "default_state"
-    local choices
-    choices=$(whiptail --title "Disable Unneeded Services" \
-        --checklist "Select services to disable (SPACE to toggle, ENTER to confirm):\nAll are safe defaults for a headless homelab server." \
-        28 72 15 \
-        "bluetooth"        "Bluetooth stack - useless on most VMs/VPS"           ON  \
-        "cups"             "Printing service - not needed on servers"             ON  \
-        "cups-browsed"     "Network printer discovery"                            ON  \
-        "avahi-daemon"     "mDNS/Bonjour discovery - convenience, not security"  ON  \
-        "ModemManager"     "Mobile broadband modems - rarely needed"             ON  \
-        "wpa_supplicant"   "WiFi auth - unnecessary on wired/VM servers"         ON  \
-        "snapd"            "Snap package daemon - heavy, optional"               OFF \
-        "multipathd"       "Disk multipath - only needed for enterprise SAN"     ON  \
-        "apport"           "Ubuntu crash reporting - noisy, phones home"         ON  \
-        "whoopsie"         "Ubuntu error reporting to Canonical"                 ON  \
-        "motd-news"        "Fetches news for MOTD - unnecessary outbound call"   ON  \
-        "iscsid"           "iSCSI initiator - only needed for iSCSI storage"     OFF \
-        3>&1 1>&2 2>&3)
+if [ "${OPT[SERVICES]}" = true ]; then
+    echo "Starting service hardening..."
 
-    local exit_status=$?
-    if [[ $exit_status -ne 0 ]]; then
+    if ! SERVICE_CHOICES=$(whiptail --title "Disable Unneeded Services" \
+        --checklist "Select services to disable (SPACE to toggle, ENTER to confirm):" \
+        28 76 15 \
+        "bluetooth"      "Bluetooth stack" ON \
+        "cups"           "Printing service" ON \
+        "cups-browsed"   "Network printer discovery" ON \
+        "avahi-daemon"   "mDNS / Bonjour discovery" ON \
+        "ModemManager"   "Mobile broadband modems" ON \
+        "wpa_supplicant" "Wi-Fi auth helper" ON \
+        "snapd"          "Snap package daemon" OFF \
+        "multipathd"     "Disk multipath" ON \
+        "apport"         "Ubuntu crash reporting" ON \
+        "whoopsie"       "Ubuntu error reporting" ON \
+        "motd-news"      "Fetches MOTD news" ON \
+        "iscsid"         "iSCSI initiator" OFF \
+        3>&1 1>&2 2>&3); then
+
         echo "Skipping service hardening."
-        return
-    fi
-
-    # Strip quotes from whiptail output
-    local selected
-    selected=$(echo "$choices" | tr -d '"')
-
-    for service in $selected; do
-        if systemctl list-unit-files --state=enabled | grep -q "^${service}.service"; then
-            echo "Disabling: $service"
-            sudo systemctl disable --now "$service" 2>/dev/null || true
+    else
+        if [ -n "$SERVICE_CHOICES" ]; then
+            mapfile -t SERVICES_TO_DISABLE < <(printf '%s\n' "$SERVICE_CHOICES" | tr -d '"')
+            for service in "${SERVICES_TO_DISABLE[@]}"; do
+                if systemctl is-enabled "$service" >/dev/null 2>&1; then
+                    echo "Disabling: $service"
+                    systemctl disable --now "$service" || true
+                else
+                    echo "Skipping $service (not enabled or not installed)"
+                fi
+            done
+            echo "Service hardening complete."
         else
-            echo "Skipping $service (not found or already disabled)"
+            echo "No services selected."
         fi
-    done
-
-    echo "Service hardening complete."
+    fi
 fi
 
-if [ "$DO_CONVENIENCE" = true ]; then
-    local choices
-    choices=$(whiptail --title "Install Convenience Tools" \
+if [ "${OPT[CONVENIENCE]}" = true ]; then
+    echo "Installing convenience tools..."
+
+    if ! CONVENIENCE_CHOICES=$(whiptail --title "Install Convenience Tools" \
         --checklist "Select tools to install (SPACE to toggle, ENTER to confirm):" \
         28 72 12 \
         "htop"        "Interactive process viewer - better than top"              ON  \
         "ncdu"        "Disk usage analyser - find what's eating your space"       ON  \
-        "curl"        "HTTP client - essential for scripts and API calls"          ON  \
-        "wget"        "File downloader - complements curl"                         ON  \
-        "git"         "Version control - needed for pulling configs/dotfiles"      ON  \
-        "tmux"        "Terminal multiplexer - persist sessions over SSH"           ON  \
-        "ufw"         "Uncomplicated Firewall - friendly iptables wrapper"         ON  \
-        "fail2ban"    "Bans IPs with repeated failed logins"                       ON  \
-        "unattended-upgrades" "Auto security patches - set and forget"            ON  \
-        "net-tools"   "ifconfig, netstat etc - old but handy for debugging"        OFF \
-        "glances"     "Richer system dashboard - heavier than htop"                OFF \
-        "tree"        "Visual directory tree - small but handy"                    ON  \
-        3>&1 1>&2 2>&3)
+        "curl"        "HTTP client - essential for scripts and API calls"         ON  \
+        "wget"        "File downloader - complements curl"                        ON  \
+        "fail2ban"    "Bans IPs with repeated failed logins"                      ON  \
+        "net-tools"   "ifconfig, netstat etc - old but handy for debugging"       OFF \
+        "glances"     "Richer system dashboard - heavier than htop"               OFF \
+        "tree"        "Visual directory tree - small but handy"                   ON  \
+        3>&1 1>&2 2>&3); then
 
-    local exit_status=$?
-    if [[ $exit_status -ne 0 ]]; then
         echo "Skipping convenience tools."
-        return
+    else
+        if [ -n "$CONVENIENCE_CHOICES" ]; then
+            mapfile -t CONVENIENCE_TO_INSTALL < <(printf '%s\n' "$CONVENIENCE_CHOICES" | tr -d '"')
+            if [ ${#CONVENIENCE_TO_INSTALL[@]} -gt 0 ]; then
+                echo "Installing: ${CONVENIENCE_TO_INSTALL[*]}"
+                apt_install "${CONVENIENCE_TO_INSTALL[@]}"
+                echo "Convenience tools installation complete."
+            else
+                echo "No tools selected."
+            fi
+        else
+            echo "No tools selected."
+        fi
     fi
-
-    local selected
-    selected=$(echo "$choices" | tr -d '"')
-
-    if [[ -n "$selected" ]]; then
-        echo "Installing selected tools..."
-        # shellcheck disable=SC2086
-        sudo apt install -y $selected
-    fi
-
-    echo "Tool installation complete."
 fi
 
 whiptail --title "Success" --msgbox "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
 echo "--- Bootstrap Complete! ---"
 
+if [ -f /var/run/reboot-required ]; then
+	if whiptail --title "Reboot Required" --yesno "Kernel or core library updates were installed.\n\nWould you like to reboot the server now?" 10 55; then
+        unset NEWT_COLORS
+		echo "Rebooting system..."
+        reboot
+    fi
+	echo "Reboot pending..."
+fi
+
 unset NEWT_COLORS
+
+exit 0
 
 
 
