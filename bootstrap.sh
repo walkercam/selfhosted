@@ -358,7 +358,9 @@ Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 EOF
 		echo "Unattended-Upgrade settings applied to /etc/apt/apt.conf.d/99-unattended-upgrades-bootstrap"
-		echo $(apt-config dump | grep "Unattended-Upgrade::Automatic-Reboot-Time")
+		
+		REBOOT_CHECK=$(apt-config dump | awk -F'"' '/Unattended-Upgrade::Automatic-Reboot-Time/ {print $2}')
+		echo "The configured reboot time is: $REBOOT_CHECK"
 
 		install -d -m 755 /etc/needrestart/conf.d
 		cat <<EOF > /etc/needrestart/conf.d/bootstrap.conf
