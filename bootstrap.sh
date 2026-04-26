@@ -74,6 +74,100 @@ export NEWT_COLORS='
   sellistbox=black, brown
 '
 
+# --- Whiptail Wrapper Functions ---
+# These redirect UI output to /dev/tty to prevent awk from corrupting the ncurses display.
+whiptail_msgbox() {
+    local title="$1"
+    local msg="$2"
+    local h="${3:-10}"
+    local w="${4:-60}"
+    if [ -n "$title" ]; then
+        whiptail --title "$title" --msgbox "$msg" "$h" "$w" >/dev/tty 2>/dev/tty
+    else
+        whiptail --msgbox "$msg" "$h" "$w" >/dev/tty 2>/dev/tty
+    fi
+}
+
+whiptail_yesno() {
+    local title="$1"
+    local msg="$2"
+    local h="${3:-10}"
+    local w="${4:-60}"
+    if [ -n "$title" ]; then
+        whiptail --title "$title" --yesno "$msg" "$h" "$w" >/dev/tty 2>/dev/tty
+    else
+        whiptail --yesno "$msg" "$h" "$w" >/dev/tty 2>/dev/tty
+    fi
+}
+
+whiptail_input() {
+    local title="$1"
+    local msg="$2"
+    local h="${3:-10}"
+    local w="${4:-60}"
+    local default="$5"
+    if [ -n "$title" ]; then
+        whiptail --title "$title" --inputbox "$msg" "$h" "$w" "$default" 3>&1 1>/dev/tty 2>&3
+    else
+        whiptail --inputbox "$msg" "$h" "$w" "$default" 3>&1 1>/dev/tty 2>&3
+    fi
+}
+
+whiptail_password() {
+    local title="$1"
+    local msg="$2"
+    local h="${3:-10}"
+    local w="${4:-60}"
+    if [ -n "$title" ]; then
+        whiptail --title "$title" --passwordbox "$msg" "$h" "$w" 3>&1 1>/dev/tty 2>&3
+    else
+        whiptail --passwordbox "$msg" "$h" "$w" 3>&1 1>/dev/tty 2>&3
+    fi
+}
+
+whiptail_checklist() {
+    local title="$1"
+    local msg="$2"
+    local h="$3"
+    local w="$4"
+    local lh="$5"
+    shift 5
+    if [ -n "$title" ]; then
+        whiptail --title "$title" --checklist "$msg" "$h" "$w" "$lh" "$@" 3>&1 1>/dev/tty 2>&3
+    else
+        whiptail --checklist "$msg" "$h" "$w" "$lh" "$@" 3>&1 1>/dev/tty 2>&3
+    fi
+}
+
+whiptail_checklist_sep() {
+    local title="$1"
+    local msg="$2"
+    local h="$3"
+    local w="$4"
+    local lh="$5"
+    shift 5
+    if [ -n "$title" ]; then
+        whiptail --title "$title" --separate-output --checklist "$msg" "$h" "$w" "$lh" "$@" 3>&1 1>/dev/tty 2>&3
+    else
+        whiptail --separate-output --checklist "$msg" "$h" "$w" "$lh" "$@" 3>&1 1>/dev/tty 2>&3
+    fi
+}
+
+whiptail_menu() {
+    local title="$1"
+    local msg="$2"
+    local h="$3"
+    local w="$4"
+    local lh="$5"
+    shift 5
+    if [ -n "$title" ]; then
+        whiptail --title "$title" --menu "$msg" "$h" "$w" "$lh" "$@" 3>&1 1>/dev/tty 2>&3
+    else
+        whiptail --menu "$msg" "$h" "$w" "$lh" "$@" 3>&1 1>/dev/tty 2>&3
+    fi
+}
+# ----------------------------------
+
 # Check that we have sudo 
 if [ "$EUID" -ne 0 ]; then
     echo "Please run this script as root (use sudo)."
@@ -112,12 +206,12 @@ echo "User: $(whoami)"
 echo "Hostname: $(hostname)"
 
 # Welcome Message
-whiptail --title "Cam's VPS Bootstrap" --msgbox "This script will prepare a fresh linux instance.\n\nTarget: Any Debian or Ubunutu Instance" 15 60
+whiptail_msgbox "Cam's VPS Bootstrap" "This script will prepare a fresh linux instance.\n\nTarget: Any Debian or Ubunutu Instance" 15 60
 
 # The Checklist Menu
 # The syntax for checklist is: [tag] [item] [status (on/off)]
 RESULTS=$(
-    whiptail --title "Cams's Bootstrap" --checklist \
+    whiptail_checklist "Cams's Bootstrap" \
     "Spacebar to select/deselect, Enter to confirm:" 22 75 14 \
     "UPDATE"     "Update system (apt update/upgrade)" ON \
     "TIME"       "Set timezone" ON \
@@ -132,8 +226,7 @@ RESULTS=$(
     "GIT"        "Install Git" OFF \
     "LOGS"       "Configure journald log retention" OFF \
     "SERVICES"   "Disable unneeded services" OFF \
-    "CONVENIENCE" "Install useful admin tools" OFF \
-    3>&1 1>&2 2>&3
+    "CONVENIENCE" "Install useful admin tools" OFF
 ) || {
     echo "Setup cancelled by user."
     exit 0
@@ -184,7 +277,7 @@ echo "Install convenience software:	$DO_CONVENIENCE"
 echo "------------------------------------------"
 
 # Confirmation (Yes/No Box)
-if whiptail --title "Confirm" --yesno "Proceed with installation?" 8 45; then
+if whiptail_yesno "Confirm" "Proceed with installation?" 8 45; then
     echo "Starting deployment..."
 else
     echo "User aborted."
@@ -212,10 +305,9 @@ if [ "$DO_TIME" = true ]; then
     echo "--- Setting timezone ---"
 
     TIMEZONE=$(
-        whiptail --title "Set Timezone" \
-        --inputbox "Enter your desired timezone.\n\nFormat: Region/City (e.g. Pacific/Auckland, Europe/London, UTC)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
-        12 65 "$TIMEZONE" \
-        3>&1 1>&2 2>&3
+        whiptail_input "Set Timezone" \
+        "Enter your desired timezone.\n\nFormat: Region/City (e.g. Pacific/Auckland, Europe/London, UTC)\n\nFull list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" \
+        12 65 "$TIMEZONE"
     ) || {
         echo "No timezone entered, using default: $TIMEZONE"
     }
@@ -235,10 +327,9 @@ if [ "$DO_AUTO" = true ]; then
     apt_install unattended-upgrades needrestart
 
     REBOOT_TIME=$(
-        whiptail --title "Auto Update Reboot Time" \
-        --inputbox "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
-        12 60 "$REBOOT_TIME" \
-        3>&1 1>&2 2>&3
+        whiptail_input "Auto Update Reboot Time" \
+        "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
+        12 60 "$REBOOT_TIME"
     ) || {
         echo "No reboot time entered, using default: $REBOOT_TIME"
 		#maybe this should be changed to exit to match the rest of the script behaviour (cancel = exit immediately)?
@@ -271,31 +362,31 @@ if [ "$DO_HOST" = true ]; then
 	NEW_HOSTNAME=$(hostnamectl --static 2>/dev/null || hostname) # Grab the current hostname as the 'default'
 	
     while true; do
-        NEW_HOSTNAME=$(whiptail --inputbox "Enter hostname (current shown):" 10 60 "$NEW_HOSTNAME" 3>&1 1>&2 2>&3) || {
+        NEW_HOSTNAME=$(whiptail_input "" "Enter hostname (current shown):" 10 60 "$NEW_HOSTNAME") || {
             echo "Hostname entry cancelled. Exiting."
             exit 1
         }
 
         # Check empty
         if [ -z "$NEW_HOSTNAME" ]; then
-            whiptail --msgbox "Hostname cannot be empty." 8 40
+            whiptail_msgbox "" "Hostname cannot be empty." 8 40
             continue
         fi
 
         # Validate format (simple, safe subset)
         if ! [[ "$NEW_HOSTNAME" =~ ^[a-z0-9-]+$ ]]; then
-            whiptail --msgbox "Invalid hostname. Use only lowercase letters, numbers, and hyphens." 8 60
+            whiptail_msgbox "" "Invalid hostname. Use only lowercase letters, numbers, and hyphens." 8 60
             continue
         fi
 
         # Optional: stricter rules (recommended)
         if [[ "$NEW_HOSTNAME" =~ ^- || "$NEW_HOSTNAME" =~ -$ ]]; then
-            whiptail --msgbox "Hostname cannot start or end with a hyphen." 8 60
+            whiptail_msgbox "" "Hostname cannot start or end with a hyphen." 8 60
             continue
         fi
 
         if [ ${#NEW_HOSTNAME} -gt 63 ]; then
-            whiptail --msgbox "Hostname must be 63 characters or less." 8 60
+            whiptail_msgbox "" "Hostname must be 63 characters or less." 8 60
             continue
         fi
 
@@ -318,7 +409,7 @@ if [ "$DO_USER" = true ]; then
 	echo "--- Creating new user ---"	
 
     # Prompt for username (with default)
-	if ! NEW_USER=$(whiptail --inputbox "Enter new username:" 10 60 "$NEW_USER" 3>&1 1>&2 2>&3); then
+	if ! NEW_USER=$(whiptail_input "" "Enter new username:" 10 60 "$NEW_USER"); then
 		echo "User creation cancelled."
 		exit 0
 	fi
@@ -330,28 +421,28 @@ if [ "$DO_USER" = true ]; then
 
         # --- Password input + validation loop ---
 		while true; do
-			if ! PASSWORD1=$(whiptail --passwordbox "Enter password for $NEW_USER (min 8 chars):" 10 60 3>&1 1>&2 2>&3); then
+			if ! PASSWORD1=$(whiptail_password "" "Enter password for $NEW_USER (min 8 chars):" 10 60); then
 				echo "User creation cancelled."
 				exit 0
 			fi
 
-			if ! PASSWORD2=$(whiptail --passwordbox "Confirm password:" 10 60 3>&1 1>&2 2>&3); then
+			if ! PASSWORD2=$(whiptail_password "" "Confirm password:" 10 60); then
 				echo "User creation cancelled."
 				exit 0
 			fi
 
 			if [ -z "$PASSWORD1" ]; then 
-				whiptail --msgbox "Password cannot be empty. Try again." 8 40
+				whiptail_msgbox "" "Password cannot be empty. Try again." 8 40
 				continue
 			fi
 
 			if [ ${#PASSWORD1} -lt 8 ]; then
-				whiptail --msgbox "Password must be at least 8 characters long. Try again." 8 50
+				whiptail_msgbox "" "Password must be at least 8 characters long. Try again." 8 50
 				continue
 			fi
 
 			if [ "$PASSWORD1" != "$PASSWORD2" ]; then
-				whiptail --msgbox "Passwords do not match. Try again." 8 50
+				whiptail_msgbox "" "Passwords do not match. Try again." 8 50
 				continue
 			fi
 
@@ -375,7 +466,7 @@ if [ "$DO_USER" = true ]; then
             # This handles multiple keys by taking the first one found
             KEY_INFO=$(awk '{print $1, $3}' "$AUTH_KEYS_FILE" | head -n 1)
             
-            if whiptail --title "Transfer SSH Keys" --yesno "Found existing key for $REAL_USER:\n\n$KEY_INFO\n\nTransfer this to $NEW_USER?" 12 60; then
+            if whiptail_yesno "Transfer SSH Keys" "Found existing key for $REAL_USER:\n\n$KEY_INFO\n\nTransfer this to $NEW_USER?" 12 60; then
                 cp "$AUTH_KEYS_FILE" /home/"$NEW_USER"/.ssh/authorized_keys
                 echo "SSH keys transferred from $REAL_USER."
             fi
@@ -407,7 +498,7 @@ if [ "$DO_KEYS" = true ]; then
         USER_OPTIONS+=("DONE" "Finish & Move to Next Section")
 
         # Select User
-		if ! TARGET_USER=$(whiptail --title "Select User" --menu "Select a user to modify keys, or 'DONE' to continue." 15 60 6 "${USER_OPTIONS[@]}" 3>&1 1>&2 2>&3); then
+		if ! TARGET_USER=$(whiptail_menu "Select User" "Select a user to modify keys, or 'DONE' to continue." 15 60 6 "${USER_OPTIONS[@]}"); then
 			echo "SSH Key addition cancelled. Stopping script here."
 			exit 0
 		fi
@@ -435,8 +526,8 @@ if [ "$DO_KEYS" = true ]; then
             done < "$AUTH_KEYS"
 
             # Pop up checkbox: Selected keys will be REMAINING
-            SELECTED_KEYS=$(whiptail --title "Manage Existing Keys" --separate-output --checklist \
-            "Uncheck keys to DELETE them. Press Space to toggle, Enter to confirm." 15 70 6 "${CHECKLIST_ITEMS[@]}" 3>&1 1>&2 2>&3)
+            SELECTED_KEYS=$(whiptail_checklist_sep "Manage Existing Keys" \
+            "Uncheck keys to DELETE them. Press Space to toggle, Enter to confirm." 15 70 6 "${CHECKLIST_ITEMS[@]}")
 
             if [ $? -eq 0 ]; then
                 echo "$SELECTED_KEYS" > "$AUTH_KEYS"
@@ -447,27 +538,27 @@ if [ "$DO_KEYS" = true ]; then
         # 4. Display Current Status
         if [ -s "$AUTH_KEYS" ]; then
             KEY_SUMMARY=$(awk '{print "Type: " $1 " | Comment: " $3}' "$AUTH_KEYS")
-            whiptail --title "Existing Keys for $TARGET_USER" --msgbox "Current active keys:\n\n$KEY_SUMMARY" 15 70
+            whiptail_msgbox "Existing Keys for $TARGET_USER" "Current active keys:\n\n$KEY_SUMMARY" 15 70
         else
-            whiptail --title "Keys Status" --msgbox "No keys currently exist for $TARGET_USER." 8 50
+            whiptail_msgbox "Keys Status" "No keys currently exist for $TARGET_USER." 8 50
         fi
 
         # 5. Key Addition Loop
         while true; do
-            if ! whiptail --title "Add New Key" --yesno "Would you like to ADD a new SSH key for $TARGET_USER?" 8 50; then
+            if ! whiptail_yesno "Add New Key" "Would you like to ADD a new SSH key for $TARGET_USER?" 8 50; then
                 break
             fi
 
-            PASTED_KEY=$(whiptail --title "Add SSH Key" --inputbox "Paste public key (ssh-rsa, ed25519, etc.):" 10 70 3>&1 1>&2 2>&3)
+            PASTED_KEY=$(whiptail_input "Add SSH Key" "Paste public key (ssh-rsa, ed25519, etc.):" 10 70 "")
             
             if [ -n "$PASTED_KEY" ]; then
                 TEMP_KEY=$(mktemp)
                 echo "$PASTED_KEY" > "$TEMP_KEY"
                 if ssh-keygen -l -f "$TEMP_KEY" >/dev/null 2>&1; then
                     echo "$PASTED_KEY" >> "$AUTH_KEYS"
-                    whiptail --msgbox "Key added successfully!" 8 40
+                    whiptail_msgbox "" "Key added successfully!" 8 40
                 else
-                    whiptail --msgbox "Invalid key format. Skipping." 8 40
+                    whiptail_msgbox "" "Invalid key format. Skipping." 8 40
                 fi
                 rm -f "$TEMP_KEY"
             fi
@@ -522,7 +613,7 @@ EOF
         systemctl reload ssh 2>/dev/null
         echo "SSH hardening applied and service reloaded."
     else
-        whiptail --msgbox "SSH configuration syntax error. SSH has not been reloaded." 10 60
+        whiptail_msgbox "" "SSH configuration syntax error. SSH has not been reloaded." 10 60
         echo "SSH configuration syntax error. SSH has not been reloaded."
     fi
 fi
@@ -538,7 +629,7 @@ if [ "$DO_USER" = true ] || [ "$DO_KEYS" = true ] || [ "$DO_SSH" = true ]; then
     WARNING_MSG+="Press YES to continue with remaining bootstrap tasks, or NO to abort the script immediately."
 
     # Display the Whiptail Warning
-    if whiptail --title "Warning: SSH Settings Modified" --yesno "$WARNING_MSG" 20 150; then
+    if whiptail_yesno "Warning: SSH Settings Modified" "$WARNING_MSG" 20 150; then
         echo "User acknowledged SSH changes. Continuing with bootstrap..."
     else
         echo "Bootstrap aborted by user to verify SSH connectivity."
@@ -582,7 +673,7 @@ if [ "$DO_TS" = true ]; then
 	echo "--- Installing Tailscale ---"
 	
 	# 1. Capture Auth Key (Optional)
-	TS_AUTHKEY=$(whiptail --title "Tailscale Auth" --passwordbox "Enter your Tailscale Auth Key (leave blank for manual auth link):" 10 65 3>&1 1>&2 2>&3) || true
+	TS_AUTHKEY=$(whiptail_password "Tailscale Auth" "Enter your Tailscale Auth Key (leave blank for manual auth link):" 10 65) || true
 	TS_AUTHKEY=$(echo "$TS_AUTHKEY" | xargs) # Trim whitespace and newlines
 
 	# 2. Run official install script	
@@ -621,8 +712,8 @@ fi
 if [ "${OPT[SERVICES]}" = true ]; then
     echo "Starting service hardening..."
 
-    if ! SERVICE_CHOICES=$(whiptail --title "Disable Unneeded Services" \
-        --checklist "Select services to disable (SPACE to toggle, ENTER to confirm):" \
+    if ! SERVICE_CHOICES=$(whiptail_checklist "Disable Unneeded Services" \
+        "Select services to disable (SPACE to toggle, ENTER to confirm):" \
         28 76 15 \
         "bluetooth"      "Bluetooth stack" ON \
         "cups"           "Printing service" ON \
@@ -635,8 +726,7 @@ if [ "${OPT[SERVICES]}" = true ]; then
         "apport"         "Ubuntu crash reporting" ON \
         "whoopsie"       "Ubuntu error reporting" ON \
         "motd-news"      "Fetches MOTD news" ON \
-        "iscsid"         "iSCSI initiator" OFF \
-        3>&1 1>&2 2>&3); then
+        "iscsid"         "iSCSI initiator" OFF); then
 
         echo "Skipping service hardening."
     else
@@ -660,8 +750,8 @@ fi
 if [ "${OPT[CONVENIENCE]}" = true ]; then
     echo "Installing convenience tools..."
 
-    if ! CONVENIENCE_CHOICES=$(whiptail --title "Install Convenience Tools" \
-        --checklist "Select tools to install (SPACE to toggle, ENTER to confirm):" \
+    if ! CONVENIENCE_CHOICES=$(whiptail_checklist "Install Convenience Tools" \
+        "Select tools to install (SPACE to toggle, ENTER to confirm):" \
         28 72 12 \
         "htop"        "Interactive process viewer - better than top"              ON  \
         "ncdu"        "Disk usage analyser - find what's eating your space"       ON  \
@@ -670,8 +760,7 @@ if [ "${OPT[CONVENIENCE]}" = true ]; then
         "fail2ban"    "Bans IPs with repeated failed logins"                      ON  \
         "net-tools"   "ifconfig, netstat etc - old but handy for debugging"       OFF \
         "glances"     "Richer system dashboard - heavier than htop"               OFF \
-        "tree"        "Visual directory tree - small but handy"                   ON  \
-        3>&1 1>&2 2>&3); then
+        "tree"        "Visual directory tree - small but handy"                   ON); then
 
         echo "Skipping convenience tools."
     else
@@ -690,11 +779,11 @@ if [ "${OPT[CONVENIENCE]}" = true ]; then
     fi
 fi
 
-whiptail --title "Success" --msgbox "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
+whiptail_msgbox "Success" "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
 echo "--- Bootstrap Complete! ---"
 
 if [ -f /var/run/reboot-required ]; then
-	if whiptail --title "Reboot Required" --yesno "Kernel or core library updates were installed.\n\nWould you like to reboot the server now?" 10 55; then
+	if whiptail_yesno "Reboot Required" "Kernel or core library updates were installed.\n\nWould you like to reboot the server now?" 10 55; then
         unset NEWT_COLORS
 		echo "Rebooting system..."
         reboot
@@ -705,6 +794,3 @@ fi
 unset NEWT_COLORS
 
 exit 0
-
-
-
