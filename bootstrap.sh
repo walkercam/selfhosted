@@ -304,7 +304,7 @@ fi
 if [ "$DO_TIME" = true ]; then
     echo "--- Setting timezone ---"
 	
-	TIMEZONE=timedatectl show --property=Timezone --value
+	TIMEZONE=$(timedatectl show --property=Timezone --value)
 
     TIMEZONE=$(
         whiptail_input "Set Timezone" \
