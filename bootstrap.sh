@@ -213,16 +213,16 @@ whiptail_msgbox "Cam's VPS Bootstrap" "This script will prepare a fresh linux in
 RESULTS=$(
     whiptail_checklist "Cams's Bootstrap" \
     "Spacebar to select/deselect, Enter to confirm:" 22 75 14 \
-    "UPDATE"     "Update system (apt update/upgrade)" ON \
-    "TIME"       "Set timezone" ON \
-    "AUTO"       "Enable unattended-upgrades & needrestart" ON \
+    "UPDATE"     "Update system (apt update/upgrade)" OFF \
+    "TIME"       "Set timezone" OFF \
+    "AUTO"       "Enable unattended-upgrades & needrestart" OFF \
     "HOST"       "Set hostname" OFF \
     "USER"       "Add non-root user" OFF \
     "KEYS"       "Add/manage SSH public keys" OFF \
     "SSH"        "Harden SSH" OFF \
     "UFW"        "Install and configure UFW (NOT FOR OCI)" OFF \
-    "TS"         "Install and configure Tailscale" ON \
-    "DOCKER"     "Install Docker" ON \
+    "TS"         "Install and configure Tailscale" OFF \
+    "DOCKER"     "Install Docker" OFF \
     "GIT"        "Install Git" OFF \
     "LOGS"       "Configure journald log retention" OFF \
     "SERVICES"   "Disable unneeded services" OFF \
@@ -699,6 +699,7 @@ if [ "$DO_DOCKER" = true ]; then
 	curl -fsSL https://get.docker.com | sh
 	# Make a home for docker stacks -p create parent directories and will not error is this directory already exists
 	mkdir -p "$STACK_DIR" #should we be using install rather than mkdir like in do_logs section?
+	echo "Docker install complete. Add your stacks to: $STACK_DIR"
 fi
 
 # Needs work
@@ -779,7 +780,7 @@ if [ "$DO_CONVENIENCE" = true ]; then
     fi
 fi
 
-whiptail_msgbox "Success" "Bootstrap Complete!\n\nNext Steps:\n1. sudo tailscale up\n2. Deploy stacks to /opt/stacks" 12 60
+whiptail_msgbox "Success" "Bootstrap Complete!" 12 60
 echo "--- Bootstrap Complete! ---"
 
 if [ -f /var/run/reboot-required ]; then
