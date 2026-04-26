@@ -327,8 +327,7 @@ if [ "$DO_AUTO" = true ]; then
     echo "--- Installing required update software: unattended-upgrades, needrestart ---"
     apt_install unattended-upgrades needrestart
 
-    REBOOT_TIME=$(
-        whiptail_input "Auto Update Reboot Time" \
+    REBOOT_TIME=$(whiptail_input "Auto Update Reboot Time" \
         "Enter the time for automatic reboots after updates.\n\nFormat: HH:MM in 24-hour time.\n\nNote: This only applies if updates require a reboot." \
         12 60 "$REBOOT_TIME"
     ) || {
