@@ -311,8 +311,7 @@ if [ "$DO_TIME" = true ]; then
         20 200 "$TIMEZONE"); then
 		
         echo "Skipping timezone setup"
-    }
-		else
+	else
 		timedatectl set-timezone "$TIMEZONE"
 		timedatectl set-ntp true
 		
