@@ -44,6 +44,11 @@ apt_install() {
     fi
 }
 
+ensure_user_home() {
+    local user="$1"
+    getent passwd "$user" | cut -d: -f6
+}
+
 set -euo pipefail #exit on errors - don't just try to continue
 
 export DEBIAN_FRONTEND=noninteractive
@@ -437,81 +442,101 @@ fi
 
 # Need to compare with chatgpts suggestion
 if [ "$DO_USER" = true ]; then
-	echo "--- Creating new user ---"	
+	echo "--- Creating non-root user (with sudo permissions) ---"	
 
     # Prompt for username (with default)
-	if ! NEW_USER=$(whiptail_input "" "Enter new username:" 10 60 "$NEW_USER"); then
-		echo "User creation cancelled."
-		exit 0
+	if ! NEW_USER=$(whiptail_input "Add User" "Enter new username:" 10 60 "$NEW_USER"); then
+		echo "User creation cancelled. Skipping."
+	else
+		if id "$NEW_USER" >/dev/null 2>&1; then
+			echo "User $NEW_USER already exists, skipping creation."
+		else
+			useradd -m -s /bin/bash -c "Created with bootstrap script" "$NEW_USER"
+			usermod -aG sudo "$NEW_USER" # Add to sudo group
+
+			# --- Password input + validation loop ---
+			while true; do
+				if ! PASSWORD1=$(whiptail_password "" "Enter password for $NEW_USER (min 8 chars):" 10 60); then
+					echo "Passsword creation cancelled. No password set for this user."
+					break
+				fi
+
+				if ! PASSWORD2=$(whiptail_password "" "Confirm password:" 10 60); then
+					echo "Passsword creation cancelled. No password set for this user."
+					break
+				fi
+
+				if [ -z "$PASSWORD1" ]; then 
+					whiptail_msgbox "" "Password cannot be empty. Try again." 8 40
+					continue
+				fi
+
+				if [ ${#PASSWORD1} -lt 8 ]; then
+					whiptail_msgbox "" "Password must be at least 8 characters long. Try again." 8 50
+					continue
+				fi
+
+				if [ "$PASSWORD1" != "$PASSWORD2" ]; then
+					whiptail_msgbox "" "Passwords do not match. Try again." 8 50
+					continue
+				fi
+
+				#If we got here password must be valid
+				echo "$NEW_USER:$PASSWORD1" | chpasswd
+				unset PASSWORD1 PASSWORD2 # Remove plain text passwords from memory
+			
+				break
+			done
+			
+			# Prepare .ssh directory
+			USER_HOME=$(ensure_user_home "$NEW_USER") || exit 1
+			install -d -m 700 -o "$NEW_USER" -g "$NEW_USER" "$USER_HOME/.ssh"
+			
+			# SSH Key Transfer Logic ---
+			# Identify who is running sudo to find their SSH keys
+			REAL_USER=${SUDO_USER:-$(whoami)}
+			AUTH_KEYS_FILE="/home/$REAL_USER/.ssh/authorized_keys"
+
+			if [ -f "$AUTH_KEYS_FILE" ]; then
+				# Extract up to 5 keys with type + comment
+				KEY_INFO=$(awk '
+					{
+						type = $1
+
+						# Find comment (last field typically)
+						comment = $NF
+
+						# If line has options (starts with no "ssh-"), shift fields
+						if ($1 !~ /^ssh-/ && $1 !~ /^ecdsa-/) {
+							type = $2
+							comment = $NF
+						}
+
+						print "- " type "  (" comment ")"
+					}
+				' "$AUTH_KEYS_FILE" | head -n 5)
+
+				KEY_COUNT=$(wc -l < "$AUTH_KEYS_FILE")
+
+				if [ "$KEY_COUNT" -gt 5 ]; then
+					KEY_INFO="$KEY_INFO\n...and $((KEY_COUNT - 5)) more"
+				fi
+
+				if whiptail_yesno "Transfer SSH Keys" \
+					"Found $KEY_COUNT SSH key(s) for $REAL_USER:\n\n$KEY_INFO\n\nTransfer these to $NEW_USER?" \
+					20 70; then
+
+					cp "$AUTH_KEYS_FILE" "$USER_HOME/.ssh/authorized_keys"
+					chown "$NEW_USER:$NEW_USER" "$USER_HOME/.ssh/authorized_keys"
+					chmod 600 "$USER_HOME/.ssh/authorized_keys"
+
+					echo "SSH keys transferred from $REAL_USER."
+				fi
+			fi
+
+			echo "User $NEW_USER has been successfully created and configured."
+		fi
 	fi
-
-    if id "$NEW_USER" >/dev/null 2>&1; then
-        echo "User $NEW_USER already exists, skipping creation."
-    else
-        useradd -m -s /bin/bash -c "Created with Cam's bootstrap script" "$NEW_USER"
-
-        # --- Password input + validation loop ---
-		while true; do
-			if ! PASSWORD1=$(whiptail_password "" "Enter password for $NEW_USER (min 8 chars):" 10 60); then
-				echo "User creation cancelled."
-				exit 0
-			fi
-
-			if ! PASSWORD2=$(whiptail_password "" "Confirm password:" 10 60); then
-				echo "User creation cancelled."
-				exit 0
-			fi
-
-			if [ -z "$PASSWORD1" ]; then 
-				whiptail_msgbox "" "Password cannot be empty. Try again." 8 40
-				continue
-			fi
-
-			if [ ${#PASSWORD1} -lt 8 ]; then
-				whiptail_msgbox "" "Password must be at least 8 characters long. Try again." 8 50
-				continue
-			fi
-
-			if [ "$PASSWORD1" != "$PASSWORD2" ]; then
-				whiptail_msgbox "" "Passwords do not match. Try again." 8 50
-				continue
-			fi
-
-			break
-		done
-
-        echo "$NEW_USER:$PASSWORD1" | chpasswd
-		unset PASSWORD1 PASSWORD2 # Remove plain text passwords from memory
-        usermod -aG sudo "$NEW_USER" # Add to sudo group
-
-        # Prepare .ssh directory
-        mkdir -p /home/"$NEW_USER"/.ssh
-		
-        # --- NEW: SSH Key Transfer Logic ---
-        # Identify who is running sudo to find their keys
-        REAL_USER=${SUDO_USER:-$(whoami)}
-        AUTH_KEYS_FILE="/home/$REAL_USER/.ssh/authorized_keys"
-
-        if [ -f "$AUTH_KEYS_FILE" ]; then
-            # Extract key info for the dialog box (Type and Comment/Email)
-            # This handles multiple keys by taking the first one found
-            KEY_INFO=$(awk '{print $1, $3}' "$AUTH_KEYS_FILE" | head -n 1)
-            
-            if whiptail_yesno "Transfer SSH Keys" "Found existing key for $REAL_USER:\n\n$KEY_INFO\n\nTransfer this to $NEW_USER?" 12 60; then
-                cp "$AUTH_KEYS_FILE" /home/"$NEW_USER"/.ssh/authorized_keys
-                echo "SSH keys transferred from $REAL_USER."
-            fi
-        fi
-		
-        # Fix ownership and permissions
-        # Doing this AFTER the SSH transfer ensures the new keys have correct ownership
-        chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"
-        chmod 700 /home/"$NEW_USER"
-        chmod 700 /home/"$NEW_USER"/.ssh
-		[ -f /home/"$NEW_USER"/.ssh/authorized_keys ] && chmod 600 /home/"$NEW_USER"/.ssh/authorized_keys
-
-        echo "User $NEW_USER has been successfully created and configured."
-    fi
 fi
 
 # Need to compare with chatgpts suggestion
